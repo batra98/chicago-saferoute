@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+:root {
+  --font-inter: "Inter", sans-serif;
+
+  /* Brand colors */
+  --color-bg: #07080f;
+  --color-surface: rgba(255, 255, 255, 0.04);
+  --color-surface-hover: rgba(255, 255, 255, 0.07);
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-border-strong: rgba(255, 255, 255, 0.15);
+
+  /* Route mode colors */
+  --color-safe: #22c55e;
+  --color-balanced: #f59e0b;
+  --color-fast: #ef4444;
+  --color-safe-dim: rgba(34, 197, 94, 0.15);
+  --color-balanced-dim: rgba(245, 158, 11, 0.15);
+  --color-fast-dim: rgba(239, 68, 68, 0.15);
+
+  /* Accent */
+  --color-accent: #6366f1;
+  --color-accent-dim: rgba(99, 102, 241, 0.15);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-inter);
+  background: var(--color-bg);
+  color: white;
+}
+
+/* Glassmorphism panel */
+.glass {
+  background: rgba(10, 12, 22, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--color-border);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+/* Mapbox overrides */
+.mapboxgl-ctrl-logo,
+.mapboxgl-ctrl-attrib {
+  display: none !important;
+}
+
+/* Route line pulse animation */
+@keyframes pulse-line {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Text stream fade-in */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease forwards;
+}
+
+/* Glow dot for active segment */
+@keyframes glowPulse {
+
+  0%,
+  100% {
+    box-shadow: 0 0 8px 2px rgba(99, 102, 241, 0.8);
+  }
+
+  50% {
+    box-shadow: 0 0 20px 6px rgba(99, 102, 241, 0.4);
+  }
+}
+
+.glow-dot {
+  animation: glowPulse 1.5s ease-in-out infinite;
+}
+
+/* Spinner */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  animation: spin 0.8s linear infinite;
+}
+
+/* Crime badge colors */
+.badge-homicide {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.badge-assault {
+  background: rgba(249, 115, 22, 0.2);
+  color: #fb923c;
+  border-color: rgba(249, 115, 22, 0.3);
+}
+
+.badge-robbery {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.badge-theft {
+  background: rgba(59, 130, 246, 0.2);
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.badge-other {
+  background: rgba(156, 163, 175, 0.2);
+  color: #9ca3af;
+  border-color: rgba(156, 163, 175, 0.3);
+}

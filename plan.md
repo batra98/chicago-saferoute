@@ -16,16 +16,17 @@
 
 ## Tech Stack
 
-| Layer       | Technology                          | Notes                                      |
-|-------------|-------------------------------------|--------------------------------------------|
-| Frontend    | Next.js 14 (App Router, TypeScript) | React SSR, handles SSE streaming           |
-| Map         | Mapbox GL JS + Deck.gl              | GPU-accelerated tiles + heatmap layer      |
-| Styling     | Tailwind CSS + shadcn/ui            | Dark glassmorphism theme                   |
-| Backend     | FastAPI (Python 3.12+)              | Async, SSE streaming                       |
-| Python Mgmt | `uv`                                | Fast, reproducible dependency management   |
-| Graph       | OSMnx + NetworkX                    | Chicago road network + weighted Dijkstra   |
-| AI Agent    | Google Gemini API (`gemini-2.0-flash`) | Streaming narration of path traversal   |
-| Crime Data  | Chicago Data Portal API             | Last 12 months, filtered by lat/lon        |
+| Layer       | Technology                              | Notes                                         |
+|-------------|-----------------------------------------|-----------------------------------------------|
+| Frontend    | Next.js 16 (App Router, TypeScript)     | React SSR, handles SSE streaming              |
+| Map         | Mapbox GL JS                            | Dark-v11 style + native heatmap layer         |
+| Styling     | Tailwind CSS v4                         | Dark glassmorphism theme                      |
+| Backend     | FastAPI (Python 3.12+)                  | Async, SSE streaming                          |
+| Python Mgmt | `uv`                                    | Fast, reproducible dependency management      |
+| Graph       | OSMnx 2.x + NetworkX                   | UTM-projected graph, largest SCC, Dijkstra    |
+| AI Model    | Google Gemini (`gemini-2.5-flash`)      | Streaming narration, AFC disabled             |
+| Crime Data  | Chicago Data Portal API                 | Last 12 months, cached as Parquet             |
+| Voice       | Web Speech API (browser-native)         | Sentence-buffered TTS, mute toggle            |
 
 ---
 
@@ -132,52 +133,27 @@ Agent: ⚠️ Heads up — this corner shows elevated theft and assault rates.
 
 **SSE stream:** each narration chunk → frontend renders live text + animates map camera to that segment.
 
-### 4. Demo Presets (2 Routes)
+### 4. Demo Presets (3 Routes)
 
 #### Demo 1: "The Tourist" 🏛️
-- **Start**: Union Station (225 S Canal St)
-- **End**: Navy Pier (600 E Grand Ave)
-- **Highlight**: Crosses the Loop — shows downtown crime clusters, safe vs. fast route choices through Millennium Park vs. State St.
+- **Start**: Millennium Park → **End**: Lincoln Park Zoo
+- **Highlight**: Long North Side corridor, shows clear route divergence.
 
 #### Demo 2: "The Student" 🎓
-- **Start**: Wicker Park Blue Line Station (1655 N Damen Ave)
-- **End**: UIC–Halsted Blue Line Station (near University of Illinois Chicago)
-- **Highlight**: Crosses 4+ neighborhoods with dramatically different safety profiles. Safest route avoids high-crime stretch of Division St.
+- **Start**: Wicker Park Blue Line → **End**: UIC–Halsted Blue Line
+- **Highlight**: Crosses 4+ neighborhoods with different safety profiles.
 
----
+#### Demo 3: "The Night Owl" 🌙
+- **Start**: Logan Square Blue Line → **End**: River North (Clark & Ohio)
+- **Highlight**: Long west→east, shows how safest route avoids NW Side crime hotspots.
 
-## API Endpoints (Backend)
+### 5. Voice Narration 🔊
 
-| Method | Endpoint            | Description                                      |
-|--------|---------------------|--------------------------------------------------|
-| GET    | `/health`           | Health check                                     |
-| GET    | `/crimes/heatmap`   | Returns crime points for map heatmap             |
-| GET    | `/crimes/summary`   | Aggregate stats by neighborhood                  |
-| POST   | `/route/compute`    | Returns 3 candidate routes (safest/balanced/fast)|
-| POST   | `/route/narrate`    | SSE stream — Gemini narration of selected route |
-| GET    | `/demo/{id}`        | Load preset demo route (1=tourist, 2=student)    |
-
----
-
-## Data Pipeline
-
-```
-Chicago Data Portal API
-  → filter: last 12 months, has lat/lon
-  → columns: date, primary_type, latitude, longitude, community_area
-  → ~150k–200k incidents
-  → store as: backend/data/crimes_2024.parquet
-
-OSMnx → Chicago city graph
-  → ~50k nodes, ~120k edges
-  → cache: backend/data/chicago_graph.pkl
-
-Crime scoring:
-  → KD-tree spatial index on crime points
-  → for each edge midpoint: query incidents within 75m
-  → attach crime_score to edge attributes
-  → cache: backend/data/chicago_graph_scored.pkl
-```
+Uses the **browser's Web Speech API** (no API key required):
+- Each text chunk is buffered until a sentence boundary (`.`, `!`, `?`)
+- Then spoken via `SpeechSynthesis.speak()`
+- Toggle button (🔊/🔇) in the narrator panel header
+- Speech cancels immediately on route stop or mute
 
 ---
 
@@ -195,11 +171,10 @@ Crime scoring:
 cd backend
 uv sync
 cp .env.example .env
-# Fill in GEMINI_API_KEY and MAPBOX_TOKEN in .env
+# Fill in GEMINI_API_KEY in .env
 
-# First run — downloads crime data and builds graph (takes ~2-3 min)
-uv run python -m crime_data    # fetches + caches crime data
-uv run python -m graph_builder # builds + caches scored road graph
+# First run — downloads crime data and builds graph (~2 min, cached after)
+uv run python init_data.py
 
 # Start server
 uv run uvicorn main:app --reload --port 8000
@@ -210,9 +185,7 @@ uv run uvicorn main:app --reload --port 8000
 ```bash
 cd frontend
 npm install
-cp .env.local.example .env.local
-# Fill in NEXT_PUBLIC_MAPBOX_TOKEN
-
+# Edit .env.local and set NEXT_PUBLIC_MAPBOX_TOKEN
 npm run dev   # starts at localhost:3000
 ```
 
@@ -223,7 +196,6 @@ npm run dev   # starts at localhost:3000
 ### backend/.env
 ```
 GEMINI_API_KEY=your_key_here
-MAPBOX_TOKEN=your_token_here
 ```
 
 ### frontend/.env.local
@@ -234,29 +206,84 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ---
 
+## Architecture Notes
+
+- **Graph projection**: OSMnx 2.x projects to UTM (meters). All node `x`/`y` must be reprojected to WGS84 via `pyproj.Transformer` before sending to the frontend. See `_node_lnglat()` in `router.py`.
+- **Gemini model**: Use `gemini-2.5-flash`. Disable AFC (`AutomaticFunctionCallingConfig(disable=True)`) — it defaults to AUTO and breaks streaming generators.
+- **Graph connectivity**: Filter to largest strongly connected component after download to prevent Dijkstra "No path" errors.
+- **SSE streaming**: `chunk` events carry text fragments; `segment_done` carries full segment + WGS84 coords. Frontend speech buffer flushes at sentence boundaries.
+
+---
+
 ## Design System
 
 - **Theme**: Dark map (Mapbox `dark-v11` style)
-- **Colors**: 
-  - Crime heatmap: purple → orange → red (low → high)
+- **Colors**:
+  - Crime heatmap: purple → orange → red
   - Safe route: `#22c55e` (green)
   - Balanced route: `#f59e0b` (amber)
   - Fast route: `#ef4444` (red)
-  - UI background: `#0a0a0f` with glassmorphism panels
-- **Typography**: Inter (Google Fonts)
-- **Animations**: Route drawing animation, camera follow, streaming text fade-in
+  - UI: `#0a0a0f` with glassmorphism panels
+- **Animations**: Route draw, camera follow, streaming text fade-in, agent dot pulse
 
 ---
 
 ## Roadmap / Nice-to-Haves
 
-- [ ] Time-of-day aware routing (crime rates differ dramatically night vs. day)
-- [ ] Neighborhood safety score cards (A–F rating)
-- [ ] Crime trend sparklines (is this area improving?)
+- [ ] Time-of-day aware routing
+- [ ] Neighborhood safety score cards (A–F)
+- [ ] Crime trend sparklines
 - [ ] Walking vs. driving mode toggle
-- [ ] Share route via URL (encoded route params)
-- [ ] Weather overlay (dark + rainy = higher risk)
+- [ ] Share route via URL
 
 ---
 
-*Built for a hackathon demo. Data sourced from [City of Chicago Data Portal](https://data.cityofchicago.org/). AI narration powered by Google Gemini.*
+## Current Narration Architecture (up to date as of Feb 2026)
+
+**Flow:**
+1. Backend computes route → returns segments with `crime_count`, `crime_score`, `street_name`, `mid_coords`
+2. `agent.py` groups consecutive segments by street name using `itertools.groupby`
+3. Each unique street is narrated **at most once** (tracked via `narrated_streets` set) — eliminates repeats
+4. Only streets with `crime_count >= 10` trigger a Gemini call (threshold filter)
+5. Gemini uses `generate_content` (non-streaming, complete response) — avoids mid-sentence truncation
+6. Results emitted as SSE `segment_done` events with `full_narration` (empty string = silent move)
+7. Frontend `AgentNarrator`: `for await` loop over SSE events → `await animateTo(coords)` → `await speakAndWait(text)`
+8. Dot stops during speech, resumes on next event — natural pause-and-continue behavior
+9. Voice and text appear simultaneously (same `await`)
+
+**Typical narration count:** 3–6 alerts per route (vs. 13+ before clustering)
+
+---
+
+## Mapbox API Brainstorm 🗺️
+
+These are possibilities to make traversal more cinematic and narration more contextual:
+
+### Already Implemented
+- **3D extruded buildings** (`fill-extrusion`) — cityscape depth
+- **Atmospheric fog** (`map.setFog()`) — dark blue haze, star intensity
+- **Native heatmap layer** — crime density visualization
+- **Crime-gradient line** — route colors green→red by per-segment `crime_score_norm`
+- **Cinematic camera tracking** — `map.jumpTo()` locked to dot position with shortest-path bearing interpolation
+- **Constant-speed animation** — Dot perfectly traces the exact street geometry polyline (`path_coords`) without cutting corners
+- **Animated route draw** — Line opacity animates from 0→1 on first load
+
+### High Impact Ideas
+| Idea | API | Effect |
+|------|-----|--------|
+| **Pulse Markers** | Mapbox DOM Markers | Spawn glowing red dots at exact crime coordinate locations when AI speaks about them |
+| **Neighborhood labels** | `map.addLayer` with custom symbol | Label each neighborhood as dot crosses it |
+
+### Interesting but Complex
+- **Mapbox Directions API** — real turn-by-turn with maneuver instructions; could replace OSMnx for routing (but loses crime-weighting control)
+- **Isochrone API** — show reachable area within N minutes, color-coded by danger level
+- **3D crime towers** (`fill-extrusion` on hexbin grid) — bar chart of crimes rising from the map
+- **Scrollytelling** — `map.flyTo` controlled by scroll position for a guided story mode
+
+### Quickest Wins to Implement Next
+1. **Incident Pulse Markers** — When the narrator stops to warn about crimes, temporarily spawn DOM markers at the exact locations of those crimes to visually prove the data.
+2. **Environment Prompts** — Pass the time of day into the Gemini prompt so the advice changes dynamically (e.g. "It's late night, stick to the well-lit side...").
+
+---
+
+*Built for a hackathon. Data from [City of Chicago Data Portal](https://data.cityofchicago.org/). AI by Google Gemini 2.5 Flash.*
