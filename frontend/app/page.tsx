@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import mapboxgl from "mapbox-gl";
 import { Shield, Eye, EyeOff, Layers } from "lucide-react";
 
-import RoutePanel, { RouteData } from "@/components/RoutePanel";
 import LocationSearch from "@/components/LocationSearch";
 import DemoPresets from "@/components/DemoPresets";
 import AgentNarrator from "@/components/AgentNarrator";
@@ -25,6 +24,15 @@ const ROUTE_COLORS = {
 
 type RouteMode = "safest" | "balanced" | "fastest";
 
+interface RouteData {
+  mode: RouteMode;
+  coords: { lat: number; lng: number }[];
+  distance_km: number;
+  travel_time_min: number;
+  crime_score: number;
+  crime_count: number;
+}
+
 interface RouteState {
   startLat: number; startLng: number;
   endLat: number; endLng: number;
@@ -35,9 +43,8 @@ export default function Home() {
   const [map, setMap] = useState<mapboxgl.Map | null>(null);
   const mapViewRef = useRef<MapViewHandle>(null);
   const [routeState, setRouteState] = useState<RouteState | null>(null);
-  const [routes, setRoutes] = useState<{ safest: RouteData; balanced: RouteData; fastest: RouteData } | null>(null);
+  const [route, setRoute] = useState<RouteData | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
-  const [selectedMode, setSelectedMode] = useState<RouteMode | null>(null);
   const [narratingMode, setNarratingMode] = useState<RouteMode | null>(null);
   const [heatmapVisible, setHeatmapVisible] = useState(true);
   const [flyToCoords, setFlyToCoords] = useState<{ lat: number; lng: number; zoom?: number } | null>(null);
@@ -45,8 +52,7 @@ export default function Home() {
   // ── Load routes ──────────────────────────────────────────────────────────
   const loadRoutes = useCallback(async (rs: RouteState) => {
     setRouteState(rs);
-    setRoutes(null);
-    setSelectedMode(null);
+    setRoute(null);
     setNarratingMode(null);
     mapViewRef.current?.clearDot();
     setRouteLoading(true);
@@ -67,8 +73,9 @@ export default function Home() {
         return;
       }
       const data = await res.json();
-      setRoutes(data);
-      setSelectedMode("safest");
+      setRoute(data);
+      // Auto-start the narration immediately
+      setNarratingMode("safest");
 
       // Fly to show the route
       const midLat = (rs.startLat + rs.endLat) / 2;
@@ -82,17 +89,16 @@ export default function Home() {
   }, []);
 
   // ── Build route layers for map ────────────────────────────────────────────
-  const routeLayers =
-    routes && selectedMode && routes.safest && routes.balanced && routes.fastest
-      ? (["fastest", "balanced", "safest"] as RouteMode[]).map((mode) => ({
-        id: `route-${mode}`,
-        coords: routes[mode].coords ?? [],
-        color: ROUTE_COLORS[mode],
-        opacity: mode === selectedMode ? 0.95 : 0.2,
-        width: mode === selectedMode ? 5 : 3,
-        isSelected: mode === selectedMode,
-      }))
-      : [];
+  const routeLayers = route
+    ? [{
+      id: `route-safest`,
+      coords: route.coords ?? [],
+      color: ROUTE_COLORS.safest,
+      opacity: 0.95,
+      width: 5,
+      isSelected: true,
+    }]
+    : [];
 
   return (
     <main className="relative w-screen h-screen overflow-hidden">
@@ -160,14 +166,11 @@ export default function Home() {
           endLat: p.endLat, endLng: p.endLng,
           startLabel: p.startLabel, endLabel: p.endLabel,
         })} />
-        {(routes || routeLoading) && (
-          <RoutePanel
-            routes={routes}
-            loading={routeLoading}
-            selectedMode={selectedMode}
-            onSelect={setSelectedMode}
-            onNarrate={(mode) => setNarratingMode(mode)}
-          />
+        {routeLoading && (
+          <div className="glass rounded-xl p-4 flex flex-col items-center justify-center gap-2 text-white/70">
+            <div className="spinner w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full" />
+            <p className="text-sm">Mapping safest traversal...</p>
+          </div>
         )}
       </div>
 

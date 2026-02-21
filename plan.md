@@ -271,7 +271,6 @@ These are possibilities to make traversal more cinematic and narration more cont
 ### High Impact Ideas
 | Idea | API | Effect |
 |------|-----|--------|
-| **Pulse Markers** | Mapbox DOM Markers | Spawn glowing red dots at exact crime coordinate locations when AI speaks about them |
 | **Neighborhood labels** | `map.addLayer` with custom symbol | Label each neighborhood as dot crosses it |
 
 ### Interesting but Complex
@@ -280,9 +279,34 @@ These are possibilities to make traversal more cinematic and narration more cont
 - **3D crime towers** (`fill-extrusion` on hexbin grid) — bar chart of crimes rising from the map
 - **Scrollytelling** — `map.flyTo` controlled by scroll position for a guided story mode
 
-### Quickest Wins to Implement Next
-1. **Incident Pulse Markers** — When the narrator stops to warn about crimes, temporarily spawn DOM markers at the exact locations of those crimes to visually prove the data.
-2. **Environment Prompts** — Pass the time of day into the Gemini prompt so the advice changes dynamically (e.g. "It's late night, stick to the well-lit side...").
+10. **Cinematic Animation & Path Following**
+    - Smooth 60fps interpolation of the Mapbox camera and Agent marker.
+    - Full polyline geometry extraction from OSMnx graph so the marker traces curved streets perfectly.
+    - Synchronized zoom, pitch (55deg), and shortest-path bearing rotation during route traversal.
+
+11. **Street-Smart Chicago Persona**
+    - A custom Gemini system prompt that translates raw crime reports into relatable, vibe-based warnings.
+    - Banned robotic statistical recitation in favor of conversational fillers and tactical safety tips.
+
+12. **Incident Pulse Markers**
+    - Dynamic Mapbox DOM markers that pulse and glow specifically when the AI pauses to warn the user about a dangerous block.
+    - Severity color-coding (Red = Violent, Orange = Property, Green = Low Risk).
+    - Custom Lucide SVG icons embedded into the markers.
+    - Hover popups displaying the specific crime type and date of occurrence.
+
+### Next Steps / Remaining Work
+
+1.  **Dynamic Routing & "Behind the Scenes" Narration (Crucial Shift)**
+    - *Goal*: Instead of overwhelming the user with 3 upfront static routes, the UI will take the start/end inputs and immediately launch into the safe route traversal.
+    - *Mechanic*: The AI won't just describe *what* is on the street, it will describe *why* it chose this street. (e.g., "I'm routing us down State Street instead of Wabash because there were 15 recent robberies one block east. We're taking the well-lit path.")
+    - *UI Update*: Remove the 3-route selection panel entirely. Streamline directly from standard input to cinematic traversal.
+
+2.  **ElevenLabs Ultra-Realistic TTS Integration**
+    - Replace the robotic browser Web Speech API with an emotionally resonant, human-sounding ElevenLabs voice.
+    - Sync the ElevenLabs audio stream with the `segment_done` SSE events so the camera panning perfectly matches the spoken cadence.
+
+3.  **Time of Day Context**
+    - Inject the current local time (or user-selected time) into the routing engine and the Gemini prompt. "It's 2 AM right now, so we are absolutely avoiding the park paths."*
 
 ---
 

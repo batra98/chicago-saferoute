@@ -166,3 +166,20 @@ body {
   color: #9ca3af;
   border-color: rgba(156, 163, 175, 0.3);
 }
+
+/* Turn Arrow animation */
+@keyframes bounce-sideways {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.animate-bounce-sideways {
+  animation: bounce-sideways 1s ease-in-out infinite;
+}

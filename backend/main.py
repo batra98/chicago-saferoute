@@ -98,30 +98,26 @@ def crime_types():
 # ── Routing endpoints ─────────────────────────────────────────────────────────
 @app.post("/route/compute")
 def route_compute(req: RouteRequest):
-    """Compute safest, balanced, and fastest routes."""
+    """Compute the single safest route."""
     G = app_state["graph"]
     try:
-        routes = compute_routes(G, req.start_lat, req.start_lng, req.end_lat, req.end_lng)
+        route = compute_routes(G, req.start_lat, req.start_lng, req.end_lat, req.end_lng)
     except Exception as e:
         logger.error("Routing error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
 
     # Remove raw node lists (too large), keep coords + stats
-    return {
-        mode: {k: v for k, v in data.items() if k != "nodes"}
-        for mode, data in routes.items()
-    }
+    return {k: v for k, v in route.items() if k != "nodes"}
 
 
 @app.post("/route/narrate")
 async def route_narrate(req: NarrateRequest):
-    """SSE stream — Gemini narrates each segment of the chosen route."""
+    """SSE stream — Gemini narrating the safe route."""
     G = app_state["graph"]
     crime_df = app_state["crime_df"]
 
     try:
-        routes = compute_routes(G, req.start_lat, req.start_lng, req.end_lat, req.end_lng)
-        route = routes[req.mode]
+        route = compute_routes(G, req.start_lat, req.start_lng, req.end_lat, req.end_lng)
         node_ids = [c["node_id"] for c in route["coords"]]
         segments = get_segment_crime_data(G, crime_df, node_ids)
     except Exception as e:

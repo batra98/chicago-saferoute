@@ -35,6 +35,7 @@ export interface MapViewHandle {
     clearDot: () => void;
     flyTo: (coords: { lat: number; lng: number; zoom?: number }) => void;
     setPulseMarkers: (incidents: PulseMarkerData[]) => void;
+    setTurnArrow: (coords: { lat: number; lng: number } | null, bearing?: number) => void;
 }
 
 interface MapViewProps {
@@ -76,10 +77,25 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     const mapRef = useRef<mapboxgl.Map | null>(null);
     const markersRef = useRef<mapboxgl.Marker[]>([]);
     const agentMarkerRef = useRef<mapboxgl.Marker | null>(null);
+    const turnArrowMarkerRef = useRef<mapboxgl.Marker | null>(null);
     const pulseMarkersRef = useRef<mapboxgl.Marker[]>([]);
     const animFrameRef = useRef<number | null>(null);
     const currentPos = useRef<{ lng: number; lat: number } | null>(null);
     const drawAnimRef = useRef<number | null>(null);
+    const drawnFeaturesRef = useRef<GeoJSON.Feature<GeoJSON.LineString>[]>([]);
+
+    // Reset drawn features when routes change
+    useEffect(() => {
+        drawnFeaturesRef.current = [];
+        const map = mapRef.current;
+        const routeSourceId = "route-safest";
+        if (map && map.getSource(routeSourceId)) {
+            (map.getSource(routeSourceId) as mapboxgl.GeoJSONSource).setData({
+                type: "FeatureCollection",
+                features: [],
+            });
+        }
+    }, [routes]);
 
     // ── Imperative handle ────────────────────────────────────────────────────
     useImperativeHandle(ref, () => ({
@@ -130,6 +146,10 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 const start = performance.now();
                 if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
 
+                // For the trailer effect: grab the current route source if it exists
+                const routeSourceId = "route-safest";
+                const source = map.getSource(routeSourceId) as mapboxgl.GeoJSONSource | undefined;
+
                 const step = (now: number) => {
                     const t = Math.min((now - start) / durationMs, 1);
                     const ease = t; // Linear speed
@@ -137,10 +157,12 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                     // 1. Interpolate Dot Position along the polyline
                     const targetDist = totalDist * ease;
                     let lng = to.lng, lat = to.lat, segmentBearing = lastBearing;
+                    let currentIndex = path.length - 1;
 
                     if (totalDist > 0) {
                         for (let i = 1; i < path.length; i++) {
                             if (targetDist <= dists[i] || i === path.length - 1) {
+                                currentIndex = i;
                                 const segmentDist = dists[i] - dists[i - 1];
                                 const segmentT = segmentDist === 0 ? 1 : (targetDist - dists[i - 1]) / segmentDist;
                                 const p1 = path[i - 1];
@@ -159,6 +181,25 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
 
                     agentMarkerRef.current?.setLngLat([lng, lat]);
                     currentPos.current = { lng, lat };
+
+                    // 1.b Trailer line drawing
+                    // We combine the history of drawn segments with the current active segment slice
+                    if (source) {
+                        const currentPathCoords = path.slice(0, currentIndex);
+                        currentPathCoords.push({ lat, lng });
+
+                        const activeFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [];
+                        for (let i = 0; i < currentPathCoords.length - 1; i++) {
+                            const p1 = currentPathCoords[i];
+                            const p2 = currentPathCoords[i + 1];
+                            activeFeatures.push({
+                                type: "Feature",
+                                properties: { crime_score_norm: (path as any)[i]?.crime_score_norm ?? 0 },
+                                geometry: { type: "LineString", coordinates: [[p1.lng, p1.lat], [p2.lng, p2.lat]] },
+                            });
+                        }
+                        source.setData({ type: "FeatureCollection", features: [...drawnFeaturesRef.current, ...activeFeatures] });
+                    }
 
                     // 2. Interpolate Camera
                     // Shortest-path angular interpolation for the bearing shift
@@ -185,6 +226,21 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                     if (t < 1) {
                         animFrameRef.current = requestAnimationFrame(step);
                     } else {
+                        // Animation finished for this entire path array. Commit it to permanent draw history.
+                        if (source && path.length > 1) {
+                            const finalSegmentFeatures: GeoJSON.Feature<GeoJSON.LineString>[] = [];
+                            for (let i = 0; i < path.length - 1; i++) {
+                                const p1 = path[i];
+                                const p2 = path[i + 1];
+                                finalSegmentFeatures.push({
+                                    type: "Feature",
+                                    properties: { crime_score_norm: (path as any)[i]?.crime_score_norm ?? 0 },
+                                    geometry: { type: "LineString", coordinates: [[p1.lng, p1.lat], [p2.lng, p2.lat]] },
+                                });
+                            }
+                            drawnFeaturesRef.current.push(...finalSegmentFeatures);
+                            source.setData({ type: "FeatureCollection", features: drawnFeaturesRef.current });
+                        }
                         resolve();
                     }
                 };
@@ -200,6 +256,9 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
 
             pulseMarkersRef.current.forEach(m => m.remove());
             pulseMarkersRef.current = [];
+
+            turnArrowMarkerRef.current?.remove();
+            turnArrowMarkerRef.current = null;
 
             // Restore default camera
             mapRef.current?.easeTo({ pitch: 30, bearing: -10, zoom: 13, duration: 1500 });
@@ -310,7 +369,45 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 pulseMarkersRef.current.push(marker);
             });
         },
+
+        setTurnArrow(coords, bearing = 0) {
+            const map = mapRef.current;
+            if (!map) return;
+
+            if (!coords) {
+                turnArrowMarkerRef.current?.remove();
+                turnArrowMarkerRef.current = null;
+                return;
+            }
+
+            if (!turnArrowMarkerRef.current) {
+                const el = document.createElement("div");
+                el.className = "turn-arrow-container flex items-center justify-center pointer-events-none";
+                el.innerHTML = `
+                    <div class="animate-bounce-sideways">
+                        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#6366f1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.8))">
+                            <line x1="12" y1="19" x2="12" y2="5"></line>
+                            <polyline points="5 12 12 5 19 12"></polyline>
+                        </svg>
+                    </div>
+                `;
+                turnArrowMarkerRef.current = new mapboxgl.Marker({ element: el, rotationAlignment: 'map' })
+                    .setLngLat([coords.lng, coords.lat])
+                    .addTo(map);
+            } else {
+                turnArrowMarkerRef.current.setLngLat([coords.lng, coords.lat]);
+            }
+
+            turnArrowMarkerRef.current.setRotation(bearing);
+        },
     }), []);
+
+    // ── Dot cleanup in clearDot ──────────────────────────────────────────────
+    useEffect(() => {
+        return () => {
+            if (turnArrowMarkerRef.current) turnArrowMarkerRef.current.remove();
+        };
+    }, []);
 
     // ── Initialize map ───────────────────────────────────────────────────────
     useEffect(() => {
@@ -383,26 +480,18 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         // Cancel any running draw animation
         if (drawAnimRef.current) cancelAnimationFrame(drawAnimRef.current);
 
+        // Reset the path trailer memory
+        drawnFeaturesRef.current = [];
+
         routes.forEach((route) => {
             if (!route.coords?.length) return;
 
             if (route.isSelected && route.coords.some((c) => c.crime_score_norm !== undefined)) {
-                // ── GRADIENT: one Feature per segment ─────────────────────
-                const features: GeoJSON.Feature<GeoJSON.LineString>[] = [];
-                for (let i = 0; i < route.coords.length - 1; i++) {
-                    const from = route.coords[i];
-                    const to = route.coords[i + 1];
-                    const score = (from.crime_score_norm ?? 0 + (to.crime_score_norm ?? 0)) / 2;
-                    features.push({
-                        type: "Feature",
-                        properties: { crime_score_norm: score },
-                        geometry: { type: "LineString", coordinates: [[from.lng, from.lat], [to.lng, to.lat]] },
-                    });
-                }
-
+                // ── INITIALIZE EMPTY LINE ─────────────────────
+                // We start with an empty feature collection. It is filled incrementally in animateTo()
                 map.addSource(route.id, {
                     type: "geojson",
-                    data: { type: "FeatureCollection", features },
+                    data: { type: "FeatureCollection", features: [] },
                 });
 
                 // Shadow/glow pass underneath
@@ -430,24 +519,9 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                         "line-color": ["interpolate", ["linear"], ["get", "crime_score_norm"],
                             0, "#22c55e", 0.4, "#f59e0b", 1, "#ef4444"],
                         "line-width": 5,
-                        "line-opacity": 0,   // start invisible → animate in
+                        "line-opacity": 0.95, // full opacity, visibility controlled by geometry length
                     },
                 });
-
-                // ── Animate route drawing in ──────────────────────────────
-                const DRAW_DURATION = 1200;
-                const drawStart = performance.now();
-                const animateDraw = (now: number) => {
-                    const t = Math.max(0, Math.min((now - drawStart) / DRAW_DURATION, 1));
-                    const ease = 1 - Math.pow(1 - t, 3); // ease-out cubic
-                    if (map.getLayer(route.id)) {
-                        map.setPaintProperty(route.id, "line-opacity", ease * 0.95);
-                        map.setPaintProperty(`${route.id}-glow`, "line-opacity", ease * 0.18);
-                    }
-                    if (t < 1) drawAnimRef.current = requestAnimationFrame(animateDraw);
-                };
-                drawAnimRef.current = requestAnimationFrame(animateDraw);
-
             } else {
                 // ── NON-SELECTED: simple solid line ───────────────────────
                 map.addSource(route.id, {
@@ -480,13 +554,16 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     useEffect(() => {
         const map = mapRef.current;
         if (!map) return;
+
         markersRef.current.forEach((m) => m.remove());
         markersRef.current = [];
+
         if (startCoords) {
             const el = document.createElement("div");
             el.className = "w-4 h-4 rounded-full bg-green-400 border-2 border-white shadow-lg";
             markersRef.current.push(new mapboxgl.Marker({ element: el }).setLngLat([startCoords.lng, startCoords.lat]).addTo(map));
         }
+
         if (endCoords) {
             const el = document.createElement("div");
             el.className = "w-4 h-4 rounded-full bg-red-400 border-2 border-white shadow-lg";

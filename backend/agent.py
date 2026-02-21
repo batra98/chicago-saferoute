@@ -18,38 +18,53 @@ logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-SYSTEM_PROMPT = """You are an incredibly street-smart, slightly informal local Chicagoan guiding your friend (the user) on a walk.
-I will give you the street name and the background crime data for the upcoming block.
-DO NOT recite numbers or statistics. Do not say 'there were 33 thefts'. Instead, translate the data into a pure 'local vibe' warning.
+SYSTEM_PROMPT = """You are the internal 'Decision Engine' of a Chicago safe-routing app, speaking directly to the user as you guide them.
+I will give you a street segment on the route we chose, nearby crime data, AND the alternative streets we avoided at this intersection.
+Your job is to explain *why* we are walking down this specific street. You are actively analyzing the environment to keep them safe.
+
+IMPORTANT: You MUST ground your reasoning in facts and exact statistics. Use the specific crime numbers to justify your route choice, and EXPLICITLY compare your choice to the alternatives provided. DO NOT invent numbers or street names.
 
 Examples of what you SHOULD sound like:
-- 'Alright, turning onto State Street. This stretch gets super busy, so just keep a hand on your phone, pickpockets love the tourist crowds here.'
-- 'We're coming up on Columbus. It's usually fine, but keep your eyes open, it gets pretty empty at night and car break-ins happen.'
-- 'Okay, next block is a bit sketchy, seen some fights break out around here. Let's just walk with purpose and keep moving.'
+- "We're taking Columbus here because it only has 2 reported thefts, whereas avoiding Michigan Ave saved us from 15 recent incidents."
+- "I routed us down State Street; it's the safest way through, avoiding the 8 batteries reported on Wabash."
+- "We're sticking to this path because it's completely clear of recent incidents. Zero crimes reported here, making it the optimal choice over the parallel streets."
 
 RULES:
-1. Keep it to 1 sentence, max 2.
-2. Use conversational fillers naturally like 'Alright', 'Okay', 'Look', 'So'.
-3. NEVER start a sentence with "Heads up" or "Just a heads up". Ban those phrases entirely.
-4. NEVER use the words 'incidents', 'data', 'reports', 'crimes', or raw numbers.
-5. If the crime counts are low and the street is safe, just output: SKIP"""
+1. Always write full, complete sentences.
+2. Keep it to 1 sentence, maximum 2.
+3. Frame your sentence as an active, calculated decision you made for the user's safety: "We're taking...", "I routed us...", "I chose this path..."
+4. Explicitly compare the exact crime numbers of the street you chose versus the avoided alternatives IF alternative data is provided.
+5. LOGICAL CONSISTENCY: NEVER call a path "safer" if it has MORE crimes than the avoided alternative. If you choose a street with more crimes (e.g., because it's a major thoroughfare or shorter), justify it as "the most direct safe-enough path" or "a calculated balance of efficiency and safety."
+6. NEVER start a sentence with "Heads up" or "Just a heads up". Ban those phrases entirely.
+7. Only output the exact string "SKIP" if you feel you've already talked too much recently on similar types of streets.
+8. CRITICAL: NEVER apologize or say you cannot fulfill the request. If alternative street data is missing, simply justify the choice by saying it is the shortest safe path."""
 
-
-# Only call Gemini for segments above this incident count
-MIN_CRIME_THRESHOLD = 10
+# We want the agent to narrate almost every major street now since it's explaining the route, 
+# so lower the threshold considerably (0 means it considers narrating everywhere, though it can still choose to SKIP)
+MIN_CRIME_THRESHOLD = 0
 
 
 def _build_segment_prompt(segment: dict, segment_num: int, total: int) -> str:
     street = segment.get("street_name", "this segment")
     crime_count = segment.get("crime_count", 0)
     crime_summary = segment.get("crime_summary", {})
-
-    top_crime = list(crime_summary.keys())[0] if crime_summary else "various issues"
+    top_crime = list(crime_summary.keys())[0] if crime_summary else "none"
     
+    avoided_alts = segment.get("avoided_alternatives", [])
+    
+    if avoided_alts:
+        alt_strs = []
+        for alt in avoided_alts:
+            alt_name = alt.get("street_name", "an alternative")
+            alt_count = alt.get("crime_count", 0)
+            alt_strs.append(f"{alt_name} ({alt_count} crimes)")
+        alt_context = f" At this turn, we avoided: {', '.join(alt_strs)}. Explain to the user WHY we chose this path, explicitly comparing our choice to the avoided alternatives."
+    else:
+        alt_context = f" We don't have alternative street data for this turn. Justify why {street} is a good safe choice based on its low crime count."
+
     return (
-        f"We are about to walk down {street}. The data shows {crime_count} recent reports, "
-        f"mostly {top_crime}. Translate this danger level into a natural, conversational warning "
-        f"for your friend, following all persona rules. Do NOT mention the number {crime_count}. Or output SKIP if too low/safe."
+        f"We are routing the user down {street}. The data shows exactly {crime_count} recent reports, "
+        f"mostly {top_crime}.{alt_context} "
     )
 
 
@@ -105,7 +120,25 @@ async def narrate_route_stream(
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_PROMPT,
                         temperature=0.7,
-                        max_output_tokens=500,
+                        max_output_tokens=4000,
+                        safety_settings=[
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                            ),
+                            types.SafetySetting(
+                                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                            ),
+                        ],
                         automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                         tool_config=types.ToolConfig(
                             function_calling_config=types.FunctionCallingConfig(mode="NONE")
@@ -134,9 +167,11 @@ async def narrate_route_stream(
 
     # Final summary — use a plain prompt so it never SKIPs
     summary_prompt = (
-        f"In 1-2 sentences, give an honest safety verdict for this {route_mode} route "
-        f"from {start_label} to {end_label}. Mention the riskiest stretch and "
-        f"whether the route is overall reasonable. Sound like a knowledgeable local, not a report."
+        f"In 1-2 sentences, give an honest safety verdict for this {route_mode} journey "
+        f"from {start_label} to {end_label}. Take a holistic view of the entire path: "
+        f"if it involves trains (like the Blue Line), acknowledge the transition between transit and walking. "
+        f"Identify the single most critical street segment or area where they should be highest alert. "
+        f"Sound like a street-smart local giving a friend the real talk, not a formal report."
     )
     summary_text = ""
     try:
@@ -146,7 +181,7 @@ async def narrate_route_stream(
             contents=summary_prompt,
             config=types.GenerateContentConfig(
                 temperature=0.7,
-                max_output_tokens=250,
+                max_output_tokens=4000,
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 tool_config=types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(mode="NONE")
@@ -168,7 +203,7 @@ async def _stream_gemini(prompt: str):
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
             temperature=0.7,
-            max_output_tokens=300,   # 2 full sentences comfortably
+            max_output_tokens=4000,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             tool_config=types.ToolConfig(
                 function_calling_config=types.FunctionCallingConfig(mode="NONE")

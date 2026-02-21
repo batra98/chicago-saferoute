@@ -63,6 +63,16 @@ function speakAndWait(text: string): Promise<void> {
 function cancelSpeech() {
     if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
 }
+
+function getBearing(from: { lat: number; lng: number }, to: { lat: number; lng: number }): number {
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLng = toRad(to.lng - from.lng);
+    const y = Math.sin(dLng) * Math.cos(toRad(to.lat));
+    const x =
+        Math.cos(toRad(from.lat)) * Math.sin(toRad(to.lat)) -
+        Math.sin(toRad(from.lat)) * Math.cos(toRad(to.lat)) * Math.cos(dLng);
+    return (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
+}
 // ──────────────────────────────────────────────────────────────────────────
 
 // Parse an SSE raw block into { eventType, payload }
@@ -148,6 +158,28 @@ export default function AgentNarrator({
                     const coords = payload.coords;
                     const text = (payload.full_narration ?? "").trim();
 
+                    if (text) {
+                        // Show text, pause dot at the corner, speak, then continue down the street
+                        setLines((prev) => [...prev, { text, crimeCount: payload.crime_count }]);
+
+                        // Visual arrow indicator at intersection
+                        if (payload.from_coords && payload.to_coords) {
+                            const bearing = getBearing(payload.from_coords, payload.to_coords);
+                            mapRef.current?.setTurnArrow(payload.from_coords, bearing);
+                        }
+
+                        // Spawn physical markers for the crimes while narrating
+                        if (payload.incidents) {
+                            mapRef.current?.setPulseMarkers(payload.incidents);
+                        }
+
+                        if (voiceRef.current) await speakAndWait(text);
+
+                        // Clear visual indicators after speaking finishes
+                        mapRef.current?.setPulseMarkers([]);
+                        mapRef.current?.setTurnArrow(null);
+                    }
+
                     if (coords) {
                         const map = mapRef.current;
                         if (map) {
@@ -160,23 +192,6 @@ export default function AgentNarrator({
                                 await map.animateTo(target, 700);
                             }
                         }
-                    }
-
-                    if (text) {
-                        // Show text, pause dot, speak, then continue
-                        setLines((prev) => [...prev, { text, crimeCount: payload.crime_count }]);
-
-                        // Spawn physical markers for the crimes while narrating
-                        if (payload.incidents) {
-                            mapRef.current?.setPulseMarkers(payload.incidents);
-                        }
-
-                        if (voiceRef.current) await speakAndWait(text);
-
-                        // Clear markers after speaking finishes
-                        mapRef.current?.setPulseMarkers([]);
-
-                        // Dot stays put during speech — resumes on next segment_done
                     }
 
                 } else if (eventType === "done") {
