@@ -14,6 +14,7 @@ export interface NarrationEvent {
     from_coords?: { lat: number; lng: number };
     to_coords?: { lat: number; lng: number };
     path_coords?: { lat: number; lng: number }[];
+    incidents?: { lat: number; lng: number; type: string }[];
     crime_count?: number;
     crime_score?: number;
     full_narration?: string;
@@ -164,7 +165,17 @@ export default function AgentNarrator({
                     if (text) {
                         // Show text, pause dot, speak, then continue
                         setLines((prev) => [...prev, { text, crimeCount: payload.crime_count }]);
+
+                        // Spawn physical markers for the crimes while narrating
+                        if (payload.incidents) {
+                            mapRef.current?.setPulseMarkers(payload.incidents);
+                        }
+
                         if (voiceRef.current) await speakAndWait(text);
+
+                        // Clear markers after speaking finishes
+                        mapRef.current?.setPulseMarkers([]);
+
                         // Dot stays put during speech — resumes on next segment_done
                     }
 

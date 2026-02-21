@@ -66,6 +66,18 @@ body {
   display: none !important;
 }
 
+/* Custom dark theme for Pulse Marker Popups */
+.crime-pulse-popup .mapboxgl-popup-content {
+  background: transparent !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  border-radius: 8px !important;
+}
+
+.crime-pulse-popup .mapboxgl-popup-tip {
+  display: none !important;
+}
+
 /* Route line pulse animation */
 @keyframes pulse-line {
 

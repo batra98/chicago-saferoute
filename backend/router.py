@@ -184,8 +184,17 @@ def get_segment_crime_data(
 
         # Summarize by type
         crime_summary = {}
+        incidents = []
         if not nearby.empty:
             crime_summary = nearby["primary_type"].value_counts().head(5).to_dict()
+            # Extract up to 50 raw coordinates for frontend pulse markers
+            for _, row in nearby.head(50).iterrows():
+                incidents.append({
+                    "lat": row["latitude"],
+                    "lng": row["longitude"],
+                    "type": row["primary_type"],
+                    "date": str(row.get("date", "Recent"))
+                })
 
         edge_data = G[u][v]
         best_key = min(edge_data, key=lambda k: edge_data[k].get("length", 1e9))
@@ -217,6 +226,7 @@ def get_segment_crime_data(
             "crime_count": len(indices),
             "crime_score": round(edata.get("crime_score", 0), 2),
             "crime_summary": crime_summary,
+            "incidents": incidents,
         })
 
     return segments

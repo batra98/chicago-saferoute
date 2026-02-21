@@ -23,10 +23,18 @@ interface RouteLayer {
     isSelected?: boolean; // true = render gradient, animate draw
 }
 
+export interface PulseMarkerData {
+    lat: number;
+    lng: number;
+    type: string;
+    date?: string;
+}
+
 export interface MapViewHandle {
-    animateTo: (coords: { lat: number; lng: number }, durationMs?: number) => Promise<void>;
+    animateTo: (toAndPath: { lat: number; lng: number; path?: { lat: number; lng: number }[] }, durationMs?: number) => Promise<void>;
     clearDot: () => void;
     flyTo: (coords: { lat: number; lng: number; zoom?: number }) => void;
+    setPulseMarkers: (incidents: PulseMarkerData[]) => void;
 }
 
 interface MapViewProps {
@@ -68,6 +76,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     const mapRef = useRef<mapboxgl.Map | null>(null);
     const markersRef = useRef<mapboxgl.Marker[]>([]);
     const agentMarkerRef = useRef<mapboxgl.Marker | null>(null);
+    const pulseMarkersRef = useRef<mapboxgl.Marker[]>([]);
     const animFrameRef = useRef<number | null>(null);
     const currentPos = useRef<{ lng: number; lat: number } | null>(null);
     const drawAnimRef = useRef<number | null>(null);
@@ -188,12 +197,118 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
             agentMarkerRef.current?.remove();
             agentMarkerRef.current = null;
             currentPos.current = null;
+
+            pulseMarkersRef.current.forEach(m => m.remove());
+            pulseMarkersRef.current = [];
+
             // Restore default camera
             mapRef.current?.easeTo({ pitch: 30, bearing: -10, zoom: 13, duration: 1500 });
         },
 
         flyTo(coords) {
             mapRef.current?.flyTo({ center: [coords.lng, coords.lat], zoom: coords.zoom ?? 13, speed: 1.4, curve: 1.2 });
+        },
+
+        setPulseMarkers(incidents) {
+            const map = mapRef.current;
+            if (!map) return;
+
+            pulseMarkersRef.current.forEach(m => m.remove());
+            pulseMarkersRef.current = [];
+
+            // 1. Helper for mapping crime type to visuals
+            const getCrimeVisuals = (type: string) => {
+                const upperType = type.toUpperCase();
+
+                // Red (Violent / High Risk)
+                if (["HOMICIDE", "BATTERY", "ASSAULT", "ROBBERY", "WEAPONS VIOLATION", "CRIM SEXUAL ASSAULT"].includes(upperType)) {
+                    return {
+                        baseColor: "bg-red-500",
+                        borderColor: "border-red-300",
+                        textColor: "text-red-500",
+                        // AlertTriangle SVG
+                        icon: `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`
+                    };
+                }
+
+                // Orange (Property / Medium Risk)
+                if (["THEFT", "MOTOR VEHICLE THEFT", "BURGLARY", "CRIMINAL DAMAGE", "DECEPTIVE PRACTICE"].includes(upperType)) {
+                    return {
+                        baseColor: "bg-orange-500",
+                        borderColor: "border-orange-300",
+                        textColor: "text-orange-500",
+                        // Search/MagnifyingGlass SVG
+                        icon: `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`
+                    };
+                }
+
+                // Green (Lower Risk / Other)
+                return {
+                    baseColor: "bg-emerald-500",
+                    borderColor: "border-emerald-300",
+                    textColor: "text-emerald-500",
+                    // Info SVG
+                    icon: `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`
+                };
+            };
+
+            incidents.forEach(inc => {
+                const visuals = getCrimeVisuals(inc.type);
+
+                const el = document.createElement("div");
+                el.innerHTML = `
+                    <div class="absolute inset-0 rounded-full ${visuals.baseColor} opacity-75 animate-ping" style="animation-duration: 2s;"></div>
+                    <div class="relative flex items-center justify-center w-5 h-5 rounded-full ${visuals.baseColor} ${visuals.borderColor} border-2 text-white shadow-lg shadow-black/50">
+                        ${visuals.icon}
+                    </div>
+                `;
+                el.className = "relative flex items-center justify-center w-5 h-5 cursor-help transition-transform hover:scale-125 hover:z-50";
+
+                // Hover Tooltip using Mapbox Popup
+                const dateStr = inc.date && inc.date !== "Recent"
+                    ? new Date(inc.date).toLocaleDateString([], { month: 'short', day: 'numeric' })
+                    : 'Recent';
+
+                const popupHTML = `
+                    <div class="text-sm border border-white/10 px-3 py-2 rounded-lg bg-black/90 text-white shadow-2xl backdrop-blur-md min-w-max font-sans">
+                        <strong class="block ${visuals.textColor} uppercase tracking-wider text-[10px] font-bold mb-0.5">${inc.type}</strong>
+                        <span class="text-xs text-slate-300 flex items-center gap-1.5 opacity-80">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                            ${dateStr}
+                        </span>
+                    </div>
+                `;
+
+                // Configure popup to be minimal and clean exactly like the design system
+                const popup = new mapboxgl.Popup({
+                    offset: 15,
+                    closeButton: false,
+                    closeOnClick: false,
+                    className: "crime-pulse-popup" // For overriding mapbox-gl-popup CSS if needed
+                }).setHTML(popupHTML);
+
+                const marker = new mapboxgl.Marker({ element: el })
+                    .setLngLat([inc.lng, inc.lat])
+                    .setPopup(popup)
+                    .addTo(map);
+
+                // Add hover listeners directly to the DOM element Mapbox created
+                let isHovered = false;
+                el.addEventListener('mouseenter', () => {
+                    if (!isHovered) {
+                        marker.togglePopup();
+                        isHovered = true;
+                    }
+                });
+                el.addEventListener('mouseleave', () => {
+                    if (isHovered) {
+                        marker.togglePopup();
+                        isHovered = false;
+                    }
+                });
+
+                pulseMarkersRef.current.push(marker);
+            });
         },
     }), []);
 

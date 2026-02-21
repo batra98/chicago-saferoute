@@ -18,18 +18,21 @@ logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-SYSTEM_PROMPT = """You are a safety-aware, street-smart local friend from Chicago walking a route with the user.
-When given a street segment with nearby crime data, give a brief, natural heads-up. 
-Sound like a real human walking next to them — conversational, varied, and context-aware.
+SYSTEM_PROMPT = """You are an incredibly street-smart, slightly informal local Chicagoan guiding your friend (the user) on a walk.
+I will give you the street name and the background crime data for the upcoming block.
+DO NOT recite numbers or statistics. Do not say 'there were 33 thefts'. Instead, translate the data into a pure 'local vibe' warning.
+
+Examples of what you SHOULD sound like:
+- 'Alright, turning onto State Street. This stretch gets super busy, so just keep a hand on your phone, pickpockets love the tourist crowds here.'
+- 'We're coming up on Columbus. It's usually fine, but keep your eyes open, it gets pretty empty at night and car break-ins happen.'
+- 'Okay, next block is a bit sketchy, seen some fights break out around here. Let's just walk with purpose and keep moving.'
 
 RULES:
-- Respond with SKIP if and only if the segment is genuinely unremarkable (low incident count, no violent crime).
-- When you DO speak: 1-2 sentences max. Use an engaging, conversational tone.
-- CRITICAL: NEVER start a sentence with "Heads up" or "Just a heads up". Ban those phrases entirely.
-- VARY YOUR PHRASING. Sometimes give a tactical tip ("Keep your phone pocketed here"), sometimes mention the specific vibe ("This stretch of {street} gets sketchy at night due to robberies"), sometimes just be direct.
-- Mention the dominant crime type natively in the sentence without sounding like a stats readout.
-- No filler phrases like "As we continue..." or "Moving along..."
-- Use 🚨 only for genuinely high-risk (lots of violent crime)."""
+1. Keep it to 1 sentence, max 2.
+2. Use conversational fillers naturally like 'Alright', 'Okay', 'Look', 'So'.
+3. NEVER start a sentence with "Heads up" or "Just a heads up". Ban those phrases entirely.
+4. NEVER use the words 'incidents', 'data', 'reports', 'crimes', or raw numbers.
+5. If the crime counts are low and the street is safe, just output: SKIP"""
 
 
 # Only call Gemini for segments above this incident count
@@ -40,22 +43,13 @@ def _build_segment_prompt(segment: dict, segment_num: int, total: int) -> str:
     street = segment.get("street_name", "this segment")
     crime_count = segment.get("crime_count", 0)
     crime_summary = segment.get("crime_summary", {})
-    distance = segment.get("distance_m", 0)
 
-    # Lead with the dominant crime type for better Gemini context
-    top_crime = list(crime_summary.keys())[0] if crime_summary else "various crimes"
-    other_crimes = (
-        ", ".join(f"{v} {k.lower()}" for k, v in list(crime_summary.items())[1:3])
-        if len(crime_summary) > 1 else ""
-    )
-    crimes_str = f"{crime_summary.get(top_crime, crime_count)} {top_crime.lower()}"
-    if other_crimes:
-        crimes_str += f", also {other_crimes}"
-
+    top_crime = list(crime_summary.keys())[0] if crime_summary else "various issues"
+    
     return (
-        f"Street: {street} ({distance}m). "
-        f"{crime_count} incidents within 100m — primarily {crimes_str}. "
-        f"Give a natural, specific heads-up for someone walking this right now, or SKIP."
+        f"We are about to walk down {street}. The data shows {crime_count} recent reports, "
+        f"mostly {top_crime}. Translate this danger level into a natural, conversational warning "
+        f"for your friend, following all persona rules. Do NOT mention the number {crime_count}. Or output SKIP if too low/safe."
     )
 
 
@@ -134,6 +128,7 @@ async def narrate_route_stream(
             "from_coords": s["from_coords"],
             "to_coords": s["to_coords"],
             "path_coords": s.get("path_coords"),
+            "incidents": s.get("incidents", []),
         })
         seg_index += 1
 
