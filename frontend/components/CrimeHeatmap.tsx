@@ -32,6 +32,7 @@ export default function CrimeHeatmap({
     hourFilter,
 }: CrimeHeatmapProps) {
     const [loading, setLoading] = useState(false);
+    const [isLayerReady, setIsLayerReady] = useState(false);
     const loadedRef = useRef(false);
 
     useEffect(() => {
@@ -117,6 +118,7 @@ export default function CrimeHeatmap({
                             },
                         });
                         loadedRef.current = true;
+                        setIsLayerReady(true);
                     }
                 };
 
@@ -135,13 +137,78 @@ export default function CrimeHeatmap({
         load();
     }, [map, crimeTypeFilter, categoryFilter, hourFilter]);
 
-    // Toggle visibility
+    // Toggle visibility & Interactivity
     useEffect(() => {
-        if (!map || !loadedRef.current) return;
+        if (!map || !isLayerReady) return;
         const vis = visible ? "visible" : "none";
         if (map.getLayer(LAYER_ID)) map.setLayoutProperty(LAYER_ID, "visibility", vis);
         if (map.getLayer(POINTS_LAYER_ID)) map.setLayoutProperty(POINTS_LAYER_ID, "visibility", vis);
-    }, [map, visible]);
+
+        // Add hover popup logic
+        const popup = new mapboxgl.Popup({
+            closeButton: false,
+            closeOnClick: false,
+            className: "crime-hover-popup",
+            offset: 10
+        });
+
+        const onMouseEnter = (e: mapboxgl.MapLayerMouseEvent) => {
+            if (!visible) return;
+            map.getCanvas().style.cursor = "pointer";
+            const coordinates = (e.features![0].geometry as any).coordinates.slice();
+            const props = e.features![0].properties;
+            const type = props?.type || "Unknown";
+            const weight = props?.weight || 0;
+            const desc = props?.description || "";
+            const block = props?.block || "";
+            const date = props?.date || "";
+
+            const content = `
+                <div class="w-64 px-4 py-3 bg-[#0a0a0a]/95 text-white rounded-xl border border-white/10 shadow-2xl backdrop-blur-xl font-sans">
+                    <div class="flex items-center justify-between mb-2 pb-2 border-b border-white/10">
+                        <p class="text-[10px] uppercase tracking-widest font-bold text-red-400 m-0 leading-none">${type}</p>
+                        <div class="bg-red-500/10 px-2 py-0.5 rounded flex gap-1 items-center">
+                            <span class="text-[9px] text-red-400 font-medium tracking-wide">SEVERITY</span>
+                            <span class="text-[10px] text-white font-bold leading-none">${weight}</span>
+                        </div>
+                    </div>
+                    
+                    ${desc ? `<p class="text-xs font-medium text-white/90 mb-2 leading-snug capitalize">${desc.toLowerCase()}</p>` : ''}
+                    
+                    <div class="space-y-1">
+                        ${block ? `
+                            <div class="flex items-center gap-2">
+                                <svg class="w-3 h-3 text-white/40" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                <p class="text-[10px] text-white/60 m-0 truncate uppercase tracking-wide">${block}</p>
+                            </div>
+                        ` : ''}
+                        ${date ? `
+                            <div class="flex items-center gap-2">
+                                <svg class="w-3 h-3 text-white/40" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                                <p class="text-[10px] text-white/60 m-0 tracking-wide">${date}</p>
+                            </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+
+            popup.setLngLat(coordinates).setHTML(content).addTo(map);
+        };
+
+        const onMouseLeave = () => {
+            map.getCanvas().style.cursor = "";
+            popup.remove();
+        };
+
+        map.on("mouseenter", POINTS_LAYER_ID, onMouseEnter);
+        map.on("mouseleave", POINTS_LAYER_ID, onMouseLeave);
+
+        return () => {
+            map.off("mouseenter", POINTS_LAYER_ID, onMouseEnter);
+            map.off("mouseleave", POINTS_LAYER_ID, onMouseLeave);
+            popup.remove();
+        };
+    }, [map, visible, isLayerReady]);
 
     return null;
 }

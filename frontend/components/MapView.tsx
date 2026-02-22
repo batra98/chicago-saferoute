@@ -21,6 +21,7 @@ interface RouteLayer {
     opacity?: number;
     width?: number;
     isSelected?: boolean; // true = render gradient, animate draw
+    dashArray?: number[];
 }
 
 export interface PulseMarkerData {
@@ -37,6 +38,7 @@ export interface MapViewHandle {
     setPulseMarkers: (incidents: PulseMarkerData[]) => void;
     setTurnArrow: (coords: { lat: number; lng: number } | null, bearing?: number) => void;
     setAlternativeLines: (alternatives: { to_coords: { lat: number; lng: number }, from_coords: { lat: number; lng: number } }[]) => void;
+    setRouteCompleted: (completed: boolean) => void;
 }
 
 interface MapViewProps {
@@ -381,6 +383,22 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
         flyTo(coords) {
             mapRef.current?.flyTo({ center: [coords.lng, coords.lat], zoom: coords.zoom ?? 13, speed: 1.4, curve: 1.2 });
         },
+
+        setRouteCompleted(completed: boolean) {
+            const map = mapRef.current;
+            if (!map) return;
+
+            // Revert shortest path
+            if (map.getLayer("route-shortest")) {
+                map.setPaintProperty("route-shortest", "line-opacity", completed ? 0 : 0.4);
+            }
+
+            // Thick solid green for completed safest path, normal dotted otherwise
+            if (map.getLayer("route-safest")) {
+                map.setPaintProperty("route-safest", "line-width", completed ? 7 : 5);
+                map.setPaintProperty("route-safest", "line-dasharray", completed ? undefined : [2, 1]);
+            }
+        },
     }), []);
 
     // ── Dot cleanup in clearDot ──────────────────────────────────────────────
@@ -500,7 +518,8 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                         "line-color": ["interpolate", ["linear"], ["get", "crime_score_norm"],
                             0, "#22c55e", 0.4, "#f59e0b", 1, "#ef4444"],
                         "line-width": 5,
-                        "line-opacity": 0.95, // full opacity, visibility controlled by geometry length
+                        "line-opacity": 0.95,
+                        "line-dasharray": route.dashArray ?? [2, 1], // Default to dotted for safest if not specified
                     },
                 });
             } else {
@@ -516,16 +535,21 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                         },
                     },
                 });
+                const paintProps: mapboxgl.AnyPaint = {
+                    "line-color": route.color,
+                    "line-width": route.width ?? 3,
+                    "line-opacity": route.opacity ?? 0.3,
+                };
+                if (route.dashArray) {
+                    paintProps["line-dasharray"] = route.dashArray;
+                }
+
                 map.addLayer({
                     id: route.id,
                     type: "line",
                     source: route.id,
                     layout: { "line-join": "round", "line-cap": "round" },
-                    paint: {
-                        "line-color": route.color,
-                        "line-width": route.width ?? 3,
-                        "line-opacity": route.opacity ?? 0.3,
-                    },
+                    paint: paintProps,
                 });
             }
         });

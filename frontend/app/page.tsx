@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import mapboxgl from "mapbox-gl";
 import { Shield, Eye, EyeOff, Layers } from "lucide-react";
@@ -29,10 +29,16 @@ type RouteMode = "safest" | "balanced" | "fastest";
 interface RouteData {
   mode: RouteMode;
   coords: { lat: number; lng: number }[];
-  distance_km: number;
+  shortest_coords?: { lat: number; lng: number }[];
+  distance_m: number;
   travel_time_min: number;
   crime_score: number;
-  crime_count: number;
+  comparison?: {
+    extra_distance_m: number;
+    extra_time_min: number;
+    crimes_avoided_score: number;
+    shortest_distance_m: number;
+  };
 }
 
 interface RouteState {
@@ -52,12 +58,14 @@ export default function Home() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>("VIOLENT");
   const [selectedHour, setSelectedHour] = useState<number | null>(9);
   const [flyToCoords, setFlyToCoords] = useState<{ lat: number; lng: number; zoom?: number } | null>(null);
+  const [routeCompleted, setRouteCompleted] = useState(false);
 
   // ── Load routes ──────────────────────────────────────────────────────────
   const loadRoutes = useCallback(async (rs: RouteState) => {
     setRouteState(rs);
     setRoute(null);
     setNarratingMode(null);
+    setRouteCompleted(false);
     mapViewRef.current?.clearDot();
     setRouteLoading(true);
 
@@ -95,16 +103,29 @@ export default function Home() {
   }, [selectedCategory, selectedHour]);
 
   // ── Build route layers for map ────────────────────────────────────────────
-  const routeLayers = route
-    ? [{
-      id: `route-safest`,
-      coords: route.coords ?? [],
-      color: ROUTE_COLORS.safest,
-      opacity: 0.95,
-      width: 5,
-      isSelected: true,
-    }]
-    : [];
+  const routeLayers = useMemo(() => {
+    return route
+      ? [
+        {
+          id: `route-shortest`,
+          coords: route.shortest_coords ?? [],
+          color: "#94a3b8",
+          opacity: 0.4, // Managed imperatively by MapView via setRouteCompleted
+          width: 2,
+          dashArray: undefined, // Solid
+        },
+        {
+          id: `route-safest`,
+          coords: route.coords ?? [],
+          color: ROUTE_COLORS.safest,
+          opacity: 1.0,
+          width: 5, // Managed imperatively by MapView
+          isSelected: true, // MUST remain true to retain the animated drawing capability
+          dashArray: [2, 1], // Managed imperatively by MapView
+        }
+      ]
+      : [];
+  }, [route]);
 
   return (
     <main className="relative w-screen h-screen overflow-hidden">
@@ -208,7 +229,11 @@ export default function Home() {
             hour={selectedHour}
             mapRef={mapViewRef}
             active={!!narratingMode}
-            onDone={() => setNarratingMode(null)}
+            onDone={() => {
+              setRouteCompleted(true);
+              mapViewRef.current?.setRouteCompleted(true);
+            }}
+            onClose={() => setNarratingMode(null)}
           />
         </div>
       )}

@@ -73,6 +73,7 @@ async def narrate_route_stream(
     route_mode: str,
     start_label: str,
     end_label: str,
+    comparison_stats: dict | None = None,
 ) -> AsyncIterator[str]:
     """
     Stream Gemini narration for noteworthy route segments only.
@@ -167,9 +168,20 @@ async def narrate_route_stream(
         seg_index += 1
 
     # Final summary — use a plain prompt so it never SKIPs
+    stats_context = ""
+    if comparison_stats:
+        extra_time = comparison_stats.get("extra_time_min", 0)
+        crimes_avoided = comparison_stats.get("crimes_avoided_score", 0)
+        stats_context = (
+            f" IMPORTANT: Mention that this safest route added approximately {extra_time} extra minutes "
+            f"compared to the direct path, but successfully avoided areas with a combined crime severity score of {crimes_avoided}. "
+            f"Frame this as a deliberate, smart safety trade-off."
+        )
+
     summary_prompt = (
         f"In 1-2 sentences, give an honest safety verdict for this {route_mode} journey "
-        f"from {start_label} to {end_label}. Take a holistic view of the entire path: "
+        f"from {start_label} to {end_label}. {stats_context} "
+        f"Take a holistic view of the entire path: "
         f"if it involves trains (like the Blue Line), acknowledge the transition between transit and walking. "
         f"Identify the single most critical street segment or area where they should be highest alert. "
         f"Sound like a street-smart local giving a friend the real talk, not a formal report."

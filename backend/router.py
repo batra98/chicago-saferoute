@@ -81,19 +81,34 @@ def compute_routes(
     hour: int | None = None,
 ) -> dict:
     """
-    Compute a single Dijkstra route optimizing for safety.
-    Returns route metadata + node coordinates.
+    Compute both the safest and shortest routes.
+    Returns route metadata + coordinates for both, plus comparison stats.
     """
     origin = get_node_for_location(G, start_lat, start_lng)
     destination = get_node_for_location(G, end_lat, end_lng)
 
-    # We only care about the safest route for the dynamic narration
+    # 1. Compute SHORTEST path (baseline)
+    logger.info("Computing shortest path baseline...")
+    shortest_path_nodes = nx.shortest_path(G, origin, destination, weight="length")
+    
+    shortest_dist = 0.0
+    shortest_crime_score = 0.0
+    shortest_coords = []
+    for i, node in enumerate(shortest_path_nodes):
+        lng, lat = _node_lnglat(G, node)
+        shortest_coords.append({"lat": lat, "lng": lng})
+        if i < len(shortest_path_nodes) - 1:
+            next_node = shortest_path_nodes[i+1]
+            edata = G[node][next_node][min(G[node][next_node], key=lambda k: G[node][next_node][k].get("length", 1e9))]
+            shortest_dist += edata.get("length", 0)
+            shortest_crime_score += edata.get("crime_score", 0)
+
+    # 2. Compute SAFEST path (using alpha/beta)
     mode = "safest"
     alpha, beta = MODE_WEIGHTS[mode]
-    logger.info("Computing single %s route...", mode)
+    logger.info("Computing safest route...")
 
-    # Build weight dict
-    # DYNAMIC FILTERING: If filters are present, we re-calculate crime scores for ALL edges
+    # Build weight dict for safest path
     if category or hour is not None:
         from crime_data import CRIME_CATEGORIES
         logger.info("Applying dynamic filters to routing: category=%s, hour=%s", category, hour)
@@ -105,7 +120,6 @@ def compute_routes(
         if hour is not None:
             df = df[df["date"].dt.hour == hour]
         
-        # Re-score edges based on filtered DF
         from scipy.spatial import KDTree
         crs = G.graph["crs"]
         transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
@@ -113,8 +127,6 @@ def compute_routes(
         tree = KDTree(np.column_stack([x_utm, y_utm]))
         crime_severities = df["severity"].values
         
-        # We need a copy or we update the original edata? 
-        # For simplicity, we just create a temporary weights dict
         dynamic_crime_scores = {}
         radius = float(os.getenv("CRIME_RADIUS_METERS", "75"))
         
@@ -124,7 +136,6 @@ def compute_routes(
             indices = tree.query_ball_point([mid_x, mid_y], radius)
             dynamic_crime_scores[(u, v, key)] = float(np.sum(crime_severities[indices])) if indices else 0.0
 
-        # Now compute Dijkstra weights using dynamic scores
         distances = [d.get("length", 1.0) for _, _, _, d in G.edges(data=True, keys=True)]
         crimes = list(dynamic_crime_scores.values())
         max_dist = max(distances) if distances else 1.0
@@ -144,12 +155,12 @@ def compute_routes(
 
     path_nodes = nx.shortest_path(G, origin, destination, weight=weight_fn)
 
-    # Collect route stats + per-edge crime scores
+    # Collect safest route stats
     total_distance = 0.0
     total_crime_score = 0.0
     total_crime_count = 0
     coords = []
-    edge_scores: list[float] = []
+    edge_scores = []
 
     for i, node in enumerate(path_nodes):
         lng, lat = _node_lnglat(G, node)
@@ -165,26 +176,35 @@ def compute_routes(
             total_crime_count += edata.get("crime_count", 0)
             edge_scores.append(float(edata.get("crime_score", 0)))
         else:
-            edge_scores.append(0.0)  # last node has no outgoing edge
+            edge_scores.append(0.0)
 
-    # Normalize crime scores to 0-1 for gradient coloring
+    # Normalize safest path scores
     max_score = max(edge_scores) if edge_scores else 1.0
-    if max_score == 0:
-        max_score = 1.0
+    if max_score == 0: max_score = 1.0
     for c, score in zip(coords, edge_scores):
         c["crime_score_norm"] = round(score / max_score, 3)
 
-    travel_time_min = (total_distance / 1000) / 25 * 60  # ~25 km/h urban
+    # 3. Calculate Comparison Stats
+    travel_time_min = (total_distance / 1000) / 25 * 60
+    shortest_time_min = (shortest_dist / 1000) / 25 * 60
+    
+    extra_dist = max(0, total_distance - shortest_dist)
+    extra_time = max(0.0, travel_time_min - shortest_time_min)
+    crimes_avoided_score = max(0.0, shortest_crime_score - total_crime_score)
 
     return {
         "mode": mode,
-        "nodes": path_nodes,
         "coords": coords,
+        "shortest_coords": shortest_coords,
         "distance_m": round(total_distance),
-        "distance_km": round(total_distance / 1000, 2),
         "travel_time_min": round(travel_time_min, 1),
         "crime_score": round(total_crime_score, 2),
-        "crime_count": total_crime_count,
+        "comparison": {
+            "extra_distance_m": round(extra_dist),
+            "extra_time_min": round(extra_time, 1),
+            "crimes_avoided_score": round(crimes_avoided_score, 2),
+            "shortest_distance_m": round(shortest_dist),
+        }
     }
 
 

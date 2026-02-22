@@ -117,6 +117,9 @@ def get_heatmap_points(df: pd.DataFrame) -> list[dict]:
             "lng": row.longitude,
             "weight": row.severity,
             "type": row.primary_type,
+            "description": getattr(row, "description", ""),
+            "block": getattr(row, "block", ""),
+            "date": row.date.strftime("%b %d, %Y • %I:%M %p") if hasattr(row, "date") else "",
         }
         for row in sample.itertuples()
     ]

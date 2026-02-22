@@ -35,6 +35,7 @@ interface AgentNarratorProps {
     active: boolean;
     mapRef: React.RefObject<MapViewHandle | null>;
     onDone?: () => void;
+    onClose?: () => void;
 }
 
 interface DisplayLine {
@@ -114,7 +115,7 @@ export default function AgentNarrator({
     startLabel, endLabel, mode,
     category, hour,
     active,
-    mapRef, onDone,
+    mapRef, onDone, onClose,
 }: AgentNarratorProps) {
     const [lines, setLines] = useState<DisplayLine[]>([]);
     const [isDone, setIsDone] = useState(false);
@@ -269,9 +270,19 @@ export default function AgentNarrator({
                     </div>
                 )}
                 {isDone && (
-                    <div className="flex items-center gap-1 ml-2">
-                        <CheckCircle className="w-4 h-4 text-green-400" />
-                        <span className="text-xs text-green-400">Complete</span>
+                    <div className="flex items-center gap-2 ml-2">
+                        <div className="flex items-center gap-1">
+                            <CheckCircle className="w-4 h-4 text-green-400" />
+                            <span className="text-xs text-green-400">Complete</span>
+                        </div>
+                        {onClose && (
+                            <button
+                                onClick={onClose}
+                                className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-[10px] text-white/70 transition-colors"
+                            >
+                                Dismiss
+                            </button>
+                        )}
                     </div>
                 )}
             </div>
