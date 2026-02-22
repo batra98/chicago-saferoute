@@ -295,9 +295,9 @@ async def narrate_route_stream(
         )
 
     summary_prompt = (
-        f"In ONE short, punchy sentence, give an honest safety verdict for this {route_mode} journey "
+        f"In exactly TWO concise sentences, give a balanced safety verdict for this {route_mode} journey "
         f"from {start_label} to {end_label}. {stats_context} "
-        f"Sound like a street-smart local giving a friend the real talk. Keep it under 15 words if possible."
+        f"Briefly highlight the most important area to be aware of, while sounding like a helpful, street-smart local friend."
     )
     summary_text = ""
     try:
