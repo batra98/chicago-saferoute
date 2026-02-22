@@ -103,14 +103,13 @@ export default function CrimeHeatmap({
                             paint: {
                                 "circle-radius": 4,
                                 "circle-color": [
-                                    "match",
-                                    ["get", "type"],
-                                    "HOMICIDE", "#ef4444",
-                                    "ASSAULT", "#f97316",
-                                    "ROBBERY", "#f59e0b",
-                                    "BATTERY", "#fb923c",
-                                    "THEFT", "#3b82f6",
-                                    "#9ca3af",
+                                    "interpolate",
+                                    ["linear"],
+                                    ["get", "weight"],
+                                    1, "#fde047", // Yellow (Low)
+                                    3, "#f97316", // Orange (Moderate)
+                                    6, "#ef4444", // Red (High)
+                                    9, "#991b1b", // Deep Red (Severe)
                                 ],
                                 "circle-opacity": 0.75,
                                 "circle-stroke-width": 1,

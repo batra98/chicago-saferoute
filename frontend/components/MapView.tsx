@@ -39,6 +39,7 @@ export interface MapViewHandle {
     setTurnArrow: (coords: { lat: number; lng: number } | null, bearing?: number) => void;
     setAlternativeLines: (alternatives: { to_coords: { lat: number; lng: number }, from_coords: { lat: number; lng: number } }[]) => void;
     setRouteCompleted: (completed: boolean) => void;
+    setPaused: (paused: boolean) => void;
 }
 
 interface MapViewProps {
@@ -86,6 +87,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
     const currentPos = useRef<{ lng: number; lat: number } | null>(null);
     const drawAnimRef = useRef<number | null>(null);
     const drawnFeaturesRef = useRef<GeoJSON.Feature<GeoJSON.LineString>[]>([]);
+    const isPausedRef = useRef(false);
 
     // Reset drawn features when routes change
     useEffect(() => {
@@ -229,7 +231,8 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 let lastBearing = map.getBearing();
 
                 // ── Unified Animation (RAF) ──────────────────────────────────
-                const start = performance.now();
+                let startTime = performance.now();
+                let accumulatedTime = 0;
                 if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
 
                 // For the trailer effect: grab the current route source if it exists
@@ -252,7 +255,14 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 }
 
                 const step = (now: number) => {
-                    const t = Math.min((now - start) / durationMs, 1);
+                    if (isPausedRef.current) {
+                        startTime = now - accumulatedTime;
+                        animFrameRef.current = requestAnimationFrame(step);
+                        return;
+                    }
+
+                    accumulatedTime = now - startTime;
+                    const t = Math.min(accumulatedTime / durationMs, 1);
                     const ease = t; // Linear speed
 
                     // 1. Interpolate Dot Position along the polyline
@@ -398,6 +408,10 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 map.setPaintProperty("route-safest", "line-width", completed ? 7 : 5);
                 map.setPaintProperty("route-safest", "line-dasharray", completed ? undefined : [2, 1]);
             }
+        },
+
+        setPaused(paused: boolean) {
+            isPausedRef.current = paused;
         },
     }), []);
 

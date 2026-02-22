@@ -6,8 +6,12 @@ streaming SSE events to the frontend.
 import os
 import json
 import logging
+import base64
+import asyncio
 from typing import AsyncIterator
 
+import struct
+import io
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -18,30 +22,46 @@ logger = logging.getLogger(__name__)
 
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-SYSTEM_PROMPT = """You are the internal 'Decision Engine' of a Chicago safe-routing app, speaking directly to the user as you guide them.
-I will give you a street segment on the route we chose, nearby crime data, AND the alternative streets we avoided at this intersection.
-Your job is to explain *why* we are walking down this specific street. You are actively analyzing the environment to keep them safe.
+SYSTEM_PROMPT = """You are a smooth, street-smart Chicago pacing companion guiding a user along a walking route.
+I will give you a street segment on the current route, nearby crime data, AND the alternative streets we consciously avoided at this intersection.
 
-IMPORTANT: You MUST ground your reasoning in facts and exact statistics. Use the specific crime numbers to justify your route choice, and EXPLICITLY compare your choice to the alternatives provided. DO NOT invent numbers or street names.
+Your job is to provide exactly ONE flowing, conversational sentence observing the current environment or explaining why we turned here.
+
+IMPORTANT: You MUST ground your reasoning in facts and exact statistics without sounding like a robot reading a spreadsheet. 
 
 Examples of what you SHOULD sound like:
-- "We're taking Columbus here because it only has 2 reported thefts, whereas avoiding Michigan Ave saved us from 15 recent incidents."
-- "I routed us down State Street; it's the safest way through, avoiding the 8 batteries reported on Wabash."
-- "We're sticking to this path because it's completely clear of recent incidents. Zero crimes reported here, making it the optimal choice over the parallel streets."
+- "Sticking to Columbus here keeps us clear of the recent thefts reported over on Michigan Ave."
+- "Wabash has seen a few batteries lately, so State Street is a much smoother path for us."
+- "Quiet stretch here on Oakley, completely clear of any recent incidents."
 
 RULES:
-1. Always write full, complete sentences.
-2. Keep it to 1 sentence, maximum 2.
-3. Frame your sentence as an active, calculated decision you made for the user's safety: "We're taking...", "I routed us...", "I chose this path..."
-4. Explicitly compare the exact crime numbers of the street you chose versus the avoided alternatives IF alternative data is provided.
-5. LOGICAL CONSISTENCY: NEVER call a path "safer" if it has MORE crimes than the avoided alternative. If you choose a street with more crimes (e.g., because it's a major thoroughfare or shorter), justify it as "the most direct safe-enough path" or "a calculated balance of efficiency and safety."
-6. NEVER start a sentence with "Heads up" or "Just a heads up". Ban those phrases entirely.
-7. Only output the exact string "SKIP" if you feel you've already talked too much recently on similar types of streets.
-8. CRITICAL: NEVER apologize or say you cannot fulfill the request. If alternative street data is missing, simply justify the choice by saying it is the shortest safe path."""
+1. ALWAYS write full, flowing, conversational sentences. Maximum 1 sentence.
+2. BAN repetitive robotic openings. NEVER start your sentence with "I've routed us down...", "We're taking...", "I chose this path...", or "We're continuing on...".
+3. BAN the phrases "Heads up", "Just a heads up", or "Zero crimes".
+4. If there is an avoided alternative provided, casually mention the crime we avoided by taking our current path.
+5. If there are no alternatives provided, just make a brief, reassuring observation about the calmness of the current street.
+6. Speak as a companion walking alongside them, not a computer interface.
+7. CRITICAL: Only output the exact string "SKIP" if you feel you have nothing uniquely valuable to say right now, or if you've already reassured them enough recently.
+"""
 
-# We want the agent to narrate almost every major street now since it's explaining the route, 
-# so lower the threshold considerably (0 means it considers narrating everywhere, though it can still choose to SKIP)
+# Thresholds for when we should proactively talk
 MIN_CRIME_THRESHOLD = 0
+
+def _is_segment_noteworthy(segment: dict) -> bool:
+    """
+    Determine if a segment is actually worth sending to the LLM.
+    Silence is golden: if this street and its alternatives both have 0 crimes, say nothing.
+    """
+    crime_count = segment.get("crime_count", 0)
+    if crime_count > 0:
+        return True # Danger on our actual path is noteworthy
+    
+    alts = segment.get("avoided_alternatives", [])
+    for alt in alts:
+        if alt.get("crime_count", 0) > 0:
+            return True # We actively avoided danger, this is noteworthy
+            
+    return False # 0 crimes here, 0 crimes around us. Just walk in silence.
 
 
 def _build_segment_prompt(segment: dict, segment_num: int, total: int) -> str:
@@ -67,6 +87,66 @@ def _build_segment_prompt(segment: dict, segment_num: int, total: int) -> str:
         f"mostly {top_crime}.{alt_context} "
     )
 
+def pcm_to_wav(pcm_data: bytes, sample_rate=24000, channels=1, bit_depth=16) -> bytes:
+    """Wraps raw PCM L16 data in a standard WAV header."""
+    byte_rate = sample_rate * channels * (bit_depth // 8)
+    block_align = channels * (bit_depth // 8)
+    
+    header = io.BytesIO()
+    header.write(b'RIFF')
+    header.write(struct.pack('<I', 36 + len(pcm_data)))
+    header.write(b'WAVE')
+    header.write(b'fmt ')
+    header.write(struct.pack('<I', 16))
+    header.write(struct.pack('<H', 1)) # PCM format
+    header.write(struct.pack('<H', channels))
+    header.write(struct.pack('<I', sample_rate))
+    header.write(struct.pack('<I', byte_rate))
+    header.write(struct.pack('<H', block_align))
+    header.write(struct.pack('<H', bit_depth))
+    header.write(b'data')
+    header.write(struct.pack('<I', len(pcm_data)))
+    return header.getvalue() + pcm_data
+
+async def generate_narrator_audio(text: str, voice_id: str | None = None) -> str | None:
+    """
+    Generates speech using Gemini Native TTS.
+    Returns base64 encoded audio string (WAV).
+    """
+    if not text:
+        return None
+        
+    # Default to Gemini 2.5 Native TTS (Unlimited Free Tier for Hackathon)
+    try:
+        # Map human-friendly names to Gemini personas
+        voice_map = {"George": "Puck", "Callum": "Charon", "Charlie": "Aoede", "Rachel": "Kore"}
+        gemini_voice = voice_map.get(voice_id, "Puck") if voice_id else "Puck"
+
+        def _call_gemini_tts():
+            resp = client.models.generate_content(
+                model='gemini-2.5-flash-preview-tts',
+                contents=text,
+                config=types.GenerateContentConfig(
+                    response_modalities=['AUDIO'],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=gemini_voice)
+                        )
+                    )
+                )
+            )
+            parts = [p for p in resp.candidates[0].content.parts if p.inline_data]
+            if not parts: return None
+            # Gemini returns raw 24kHz PCM. Convert to playable WAV.
+            return pcm_to_wav(parts[0].inline_data.data)
+
+        audio_data = await asyncio.wait_for(asyncio.to_thread(_call_gemini_tts), timeout=8.0)
+        if audio_data:
+            return base64.b64encode(audio_data).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Gemini TTS error: {e}")
+            
+    return None
 
 async def narrate_route_stream(
     segments: list[dict],
@@ -74,6 +154,7 @@ async def narrate_route_stream(
     start_label: str,
     end_label: str,
     comparison_stats: dict | None = None,
+    voice_id: str | None = None,
 ) -> AsyncIterator[str]:
     """
     Stream Gemini narration for noteworthy route segments only.
@@ -81,9 +162,12 @@ async def narrate_route_stream(
     """
     total = len(segments)
 
-    # Brief intro
-    intro = f"SafeRoute — {route_mode.upper()} mode. {start_label} → {end_label}. Analyzing {total} segments."
-    yield _sse_event("intro", {"text": intro, "segment_index": -1})
+    intro = f"Charting a clear course from {start_label} to {end_label}. I'm tracking {total} blocks ahead to ensure a safe journey."
+    yield _sse_event("intro", {
+        "text": intro, 
+        "segment_index": -1,
+        "audio_base64": await generate_narrator_audio(intro, voice_id)
+    })
 
     narrated_streets: set[str] = set()
     
@@ -104,7 +188,7 @@ async def narrate_route_stream(
         max_crime_on_street = street_max_crimes.get(street, crime_count)
 
         should_narrate = (
-            max_crime_on_street >= MIN_CRIME_THRESHOLD and
+            _is_segment_noteworthy(s) and
             street not in narrated_streets and
             crime_count == max_crime_on_street # Narrate when we actually hit the worst segment of that street
         )
@@ -115,47 +199,63 @@ async def narrate_route_stream(
             prompt = _build_segment_prompt(s, seg_index, total)
 
             try:
-                resp = await client.aio.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_PROMPT,
-                        temperature=0.7,
-                        max_output_tokens=4000,
-                        safety_settings=[
-                            types.SafetySetting(
-                                category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                                threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                # We use the sync client running in a separate thread so it doesn't block the main event loop
+                # This guarantees `asyncio.wait_for` can actually interrupt a hung socket.
+                def _call_gemini_sync():
+                    return client.models.generate_content(
+                        model="gemini-2.5-flash",
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=SYSTEM_PROMPT,
+                            temperature=0.7,
+                            max_output_tokens=4000,
+                            safety_settings=[
+                                types.SafetySetting(
+                                    category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                                    threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                                ),
+                                types.SafetySetting(
+                                    category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                                    threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                                ),
+                                types.SafetySetting(
+                                    category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                                    threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                                ),
+                                types.SafetySetting(
+                                    category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                                    threshold=types.HarmBlockThreshold.BLOCK_NONE,
+                                ),
+                            ],
+                            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                            tool_config=types.ToolConfig(
+                                function_calling_config=types.FunctionCallingConfig(mode="NONE")
                             ),
-                            types.SafetySetting(
-                                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                                threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                            ),
-                            types.SafetySetting(
-                                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                                threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                            ),
-                            types.SafetySetting(
-                                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                                threshold=types.HarmBlockThreshold.BLOCK_NONE,
-                            ),
-                        ],
-                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                        tool_config=types.ToolConfig(
-                            function_calling_config=types.FunctionCallingConfig(mode="NONE")
                         ),
-                    ),
+                    )
+
+                resp = await asyncio.wait_for(
+                    asyncio.to_thread(_call_gemini_sync),
+                    timeout=8.0
                 )
                 full_text = resp.text or ""
+            except asyncio.TimeoutError:
+                logger.error("Gemini TIMEOUT on street %s (took >8s)", street)
+                full_text = f"Proceed carefully along {street}."
             except Exception as e:
                 logger.error("Gemini error on street %s: %s", street, e)
 
             if full_text.strip().upper().startswith("SKIP"):
                 full_text = ""
 
+        audio = None
+        if full_text.strip():
+            audio = await generate_narrator_audio(full_text.strip(), voice_id)
+            
         yield _sse_event("segment_done", {
             "segment_index": seg_index,
             "full_narration": full_text.strip(),
+            "audio_base64": audio,
             "crime_count": crime_count,
             "crime_score": s["crime_score"],
             "coords": s["mid_coords"],
@@ -188,24 +288,34 @@ async def narrate_route_stream(
     )
     summary_text = ""
     try:
-        # Use a fresh call without the SKIP system prompt for the summary
-        response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=summary_prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.7,
-                max_output_tokens=4000,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                tool_config=types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(mode="NONE")
+        def _call_gemini_summary_sync():
+            return client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=summary_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.7,
+                    max_output_tokens=4000,
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                    tool_config=types.ToolConfig(
+                        function_calling_config=types.FunctionCallingConfig(mode="NONE")
+                    ),
                 ),
-            ),
+            )
+        response = await asyncio.wait_for(
+            asyncio.to_thread(_call_gemini_summary_sync),
+            timeout=10.0
         )
         summary_text = response.text or ""
+    except asyncio.TimeoutError:
+        logger.error("Gemini TIMEOUT on path summary (took >10s)")
+        summary_text = f"You've arrived at {end_label}. Stay safe."
     except Exception as e:
         logger.error("Gemini summary error: %s", e)
 
-    yield _sse_event("done", {"summary": summary_text.strip()})
+    yield _sse_event("done", {
+        "summary": summary_text.strip(),
+        "audio_base64": await generate_narrator_audio(summary_text.strip(), voice_id)
+    })
 
 
 async def _stream_gemini(prompt: str):

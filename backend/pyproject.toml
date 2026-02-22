@@ -25,6 +25,7 @@ dependencies = [
     "sse-starlette>=2.1.0",
     # Required by OSMnx nearest_nodes on unprojected graphs
     "scikit-learn>=1.5.0",
+    "google-cloud-texttospeech>=2.34.0",
 ]
 
 [tool.uv]

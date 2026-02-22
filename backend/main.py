@@ -157,7 +157,8 @@ async def route_narrate(req: NarrateRequest):
     async def event_stream():
         async for event in narrate_route_stream(
             segments, req.mode, req.start_label, req.end_label,
-            comparison_stats=route.get("comparison")
+            comparison_stats=route.get("comparison"),
+            voice_id=req.voice_id
         ):
             yield event
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Bot, AlertTriangle, CheckCircle, Navigation, Volume2, VolumeX } from "lucide-react";
+import { Bot, AlertTriangle, CheckCircle, Navigation, Volume2, VolumeX, Play, Pause } from "lucide-react";
 import { MapViewHandle } from "./MapView";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -20,6 +20,11 @@ export interface NarrationEvent {
     crime_score?: number;
     full_narration?: string;
     summary?: string;
+    audio_base64?: string;
+    comparison_stats?: {
+        extra_time_min: number;
+        crimes_avoided_score: number;
+    };
 }
 
 interface AgentNarratorProps {
@@ -33,6 +38,7 @@ interface AgentNarratorProps {
     category?: string | null;
     hour?: number | null;
     active: boolean;
+    voiceId?: string;
     mapRef: React.RefObject<MapViewHandle | null>;
     onDone?: () => void;
     onClose?: () => void;
@@ -42,31 +48,13 @@ interface DisplayLine {
     text: string;
     crimeCount?: number;
     isSummary?: boolean;
+    stats?: {
+        extra_time_min: number;
+        crimes_avoided_score: number;
+    };
 }
 
-// ── Voice helpers ──────────────────────────────────────────────────────────
-function speakAndWait(text: string): Promise<void> {
-    return new Promise((resolve) => {
-        if (typeof window === "undefined" || !window.speechSynthesis) { resolve(); return; }
-        const clean = text.replace(/[^\x00-\x7F\u00C0-\u024F\s.,!?'-]/g, "").trim();
-        if (!clean) { resolve(); return; }
-        window.speechSynthesis.cancel(); // cancel any previous
-        const utt = new SpeechSynthesisUtterance(clean);
-        utt.rate = 1.05;
-        utt.onend = () => resolve();
-        utt.onerror = () => resolve();
-        const voices = window.speechSynthesis.getVoices();
-        const preferred = voices.find((v) =>
-            v.lang.startsWith("en") && (v.name.includes("Samantha") || v.name.includes("Google") || v.name.includes("Natural"))
-        );
-        if (preferred) utt.voice = preferred;
-        window.speechSynthesis.speak(utt);
-    });
-}
-
-function cancelSpeech() {
-    if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
-}
+// Removed legacy speechSynthesis helpers
 
 function getBearing(from: { lat: number; lng: number }, to: { lat: number; lng: number }): number {
     const toRad = (d: number) => (d * Math.PI) / 180;
@@ -114,19 +102,131 @@ export default function AgentNarrator({
     startLat, startLng, endLat, endLng,
     startLabel, endLabel, mode,
     category, hour,
-    active,
+    active, voiceId,
     mapRef, onDone, onClose,
 }: AgentNarratorProps) {
     const [lines, setLines] = useState<DisplayLine[]>([]);
     const [isDone, setIsDone] = useState(false);
     const [voiceEnabled, setVoiceEnabled] = useState(true);
+    const [isPaused, setIsPaused] = useState(false);
+
     const bottomRef = useRef<HTMLDivElement>(null);
     const abortRef = useRef<AbortController | null>(null);
     const voiceRef = useRef(voiceEnabled);
     voiceRef.current = voiceEnabled;
+    const isPausedRef = useRef(isPaused);
+    isPausedRef.current = isPaused;
+
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+    const resolveAudioRef = useRef<(() => void) | null>(null);
 
     const toggleVoice = useCallback(() => {
-        setVoiceEnabled((v) => { if (v) cancelSpeech(); return !v; });
+        setVoiceEnabled((v) => {
+            const next = !v;
+            if (!next) {
+                audioRef.current?.pause();
+                if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.cancel();
+                resolveAudioRef.current?.(); // instantly skip ahead
+            } else if (next && audioRef.current && !isPausedRef.current) {
+                audioRef.current.play().catch(() => { });
+            }
+            return next;
+        });
+    }, []);
+
+    const togglePause = useCallback(() => {
+        setIsPaused((p) => {
+            const next = !p;
+            if (next) {
+                audioRef.current?.pause();
+                if (typeof window !== "undefined" && window.speechSynthesis) window.speechSynthesis.pause();
+            } else if (!next && voiceRef.current && audioRef.current && audioRef.current.paused && !audioRef.current.ended) {
+                // crucial: we resume the existing element without resetting its source or time
+                audioRef.current.play().catch(() => { });
+                if (typeof window !== "undefined" && window.speechSynthesis && window.speechSynthesis.paused) {
+                    window.speechSynthesis.resume();
+                }
+            } else if (!next && voiceRef.current && typeof window !== "undefined" && window.speechSynthesis && window.speechSynthesis.paused) {
+                window.speechSynthesis.resume();
+            }
+            if (mapRef.current?.setPaused) {
+                mapRef.current.setPaused(next);
+            }
+            return next;
+        });
+    }, [mapRef]);
+
+    const playAudioBase64AndWait = useCallback((base64: string | undefined, fallbackText?: string): Promise<void> => {
+        return new Promise((resolve) => {
+            // If previous audio is still running, resolve it immediately to stop overlapping
+            if (resolveAudioRef.current) {
+                resolveAudioRef.current();
+            }
+            resolveAudioRef.current = resolve;
+
+            if (!base64 || !voiceRef.current) {
+                if (!base64 && voiceRef.current && fallbackText && typeof window !== 'undefined' && window.speechSynthesis) {
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(fallbackText);
+                    utterance.rate = 0.95;
+
+                    const cleanup = () => {
+                        utterance.onend = null;
+                        utterance.onerror = null;
+                        if (resolveAudioRef.current === resolve) {
+                            resolveAudioRef.current = null;
+                        }
+                        resolve();
+                    };
+
+                    utterance.onend = cleanup;
+                    utterance.onerror = cleanup;
+
+                    if (!isPausedRef.current) {
+                        window.speechSynthesis.speak(utterance);
+                    } else {
+                        // Will speak later when unpaused
+                        setTimeout(cleanup, 1500);
+                    }
+                    return;
+                }
+                setTimeout(resolve, 1500);
+                return;
+            }
+
+            if (audioRef.current) {
+                audioRef.current.pause();
+                audioRef.current.src = "";
+            }
+
+            // Detect MIME type (Gemini is WAV, ElevenLabs is MP3)
+            // WAV starts with 'RIFF' -> 'UklGR', MP3 often starts with 'ID3' -> 'SUQz' or sync frames
+            const mime = base64.startsWith("UklGR") ? "audio/wav" : "audio/mpeg";
+            const uri = `data:${mime};base64,${base64}`;
+            const audio = new Audio(uri);
+            audioRef.current = audio;
+
+            const cleanup = () => {
+                audio.onended = null;
+                audio.onerror = null;
+                audio.onpause = null;
+                audio.onplay = null;
+                if (resolveAudioRef.current === resolve) {
+                    resolveAudioRef.current = null;
+                }
+                resolve();
+            };
+
+            audio.onended = cleanup;
+            audio.onerror = cleanup;
+
+            // If we are currently paused, don't start playing yet. 
+            // The user will hit Resume, which triggers `togglePause` -> `audioRef.current.play()`.
+            // Crucially, this promise stays pending, halting the SSE loop so we don't skip ahead text.
+            if (!isPausedRef.current) {
+                audio.play().catch(cleanup);
+            }
+        });
     }, []);
 
     useEffect(() => {
@@ -134,7 +234,7 @@ export default function AgentNarrator({
 
         setLines([]);
         setIsDone(false);
-        cancelSpeech();
+        audioRef.current?.pause();
 
         abortRef.current?.abort();
         const abort = new AbortController();
@@ -150,7 +250,8 @@ export default function AgentNarrator({
                     start_label: startLabel, end_label: endLabel,
                     mode,
                     category,
-                    hour
+                    hour,
+                    voice_id: voiceId
                 }),
                 signal: abort.signal,
             });
@@ -161,7 +262,7 @@ export default function AgentNarrator({
                 if (eventType === "intro") {
                     const text = payload.text ?? "";
                     setLines([{ text }]);
-                    if (voiceRef.current) await speakAndWait(text);
+                    await playAudioBase64AndWait(payload.audio_base64, text);
                     if (abort.signal.aborted) break;
 
                 } else if (eventType === "segment_done") {
@@ -178,22 +279,18 @@ export default function AgentNarrator({
                             mapRef.current?.setTurnArrow(payload.from_coords, bearing);
                         }
 
-                        // Visualization for avoided streets
                         if (payload.avoided_alternatives && payload.from_coords) {
                             const from = payload.from_coords;
                             const alts = payload.avoided_alternatives.map((alt: any) => ({
                                 from_coords: from,
                                 to_coords: alt.to_coords
                             }));
-                            console.log("AgentNarrator: mapRef.current keys:", Object.keys(mapRef.current || {}));
                             if (mapRef.current && typeof mapRef.current.setAlternativeLines === 'function') {
                                 mapRef.current.setAlternativeLines(alts);
-                            } else {
-                                console.warn("AgentNarrator: setAlternativeLines is NOT a function on mapRef.current", mapRef.current);
                             }
                         }
 
-                        if (voiceRef.current) await speakAndWait(text);
+                        await playAudioBase64AndWait(payload.audio_base64, text);
                         if (abort.signal.aborted) break;
 
                         // Clear visual indicators after speaking finishes
@@ -218,8 +315,12 @@ export default function AgentNarrator({
                 } else if (eventType === "done") {
                     const summary = (payload.summary ?? "").trim();
                     if (summary) {
-                        setLines((prev) => [...prev, { text: summary, isSummary: true }]);
-                        if (voiceRef.current) await speakAndWait(summary);
+                        setLines((prev) => [...prev, {
+                            text: summary,
+                            isSummary: true,
+                            stats: payload.comparison_stats
+                        }]);
+                        await playAudioBase64AndWait(payload.audio_base64, summary);
                     }
                     mapRef.current?.clearDot();
                     setIsDone(true);
@@ -232,9 +333,12 @@ export default function AgentNarrator({
 
         return () => {
             abort.abort();
-            cancelSpeech();
+            audioRef.current?.pause();
+            if (typeof window !== "undefined" && window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
         };
-    }, [active, startLat, startLng, endLat, endLng, mode, category, hour]);
+    }, [active, startLat, startLng, endLat, endLng, mode, category, hour, playAudioBase64AndWait]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -253,15 +357,27 @@ export default function AgentNarrator({
                     <p className={`text-xs ${modeColors[mode]} capitalize`}>{mode} mode</p>
                 </div>
 
-                <button
-                    onClick={toggleVoice}
-                    title={voiceEnabled ? "Mute voice" : "Enable voice"}
-                    className={`ml-auto p-1.5 rounded-lg transition-colors ${voiceEnabled
-                        ? "bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30"
-                        : "bg-white/5 text-white/30 hover:bg-white/10"}`}
-                >
-                    {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
-                </button>
+                <div className="flex ml-auto gap-2">
+                    <button
+                        onClick={togglePause}
+                        title={isPaused ? "Resume Route" : "Pause Route"}
+                        className={`p-1.5 rounded-lg transition-colors ${isPaused
+                            ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30"
+                            : "bg-white/5 text-white/40 hover:bg-white/10"}`}
+                    >
+                        {isPaused ? <Play className="w-4 h-4 fill-current" /> : <Pause className="w-4 h-4 fill-current" />}
+                    </button>
+
+                    <button
+                        onClick={toggleVoice}
+                        title={voiceEnabled ? "Mute voice" : "Enable voice"}
+                        className={`p-1.5 rounded-lg transition-colors ${voiceEnabled
+                            ? "bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30"
+                            : "bg-white/5 text-white/30 hover:bg-white/10"}`}
+                    >
+                        {voiceEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                    </button>
+                </div>
 
                 {!isDone && active && (
                     <div className="flex items-center gap-1.5 ml-2">
@@ -299,6 +415,19 @@ export default function AgentNarrator({
                             <div className="flex items-center gap-1 mb-1">
                                 <AlertTriangle className="w-3 h-3 text-amber-400" />
                                 <span className="text-xs text-amber-400/80">{line.crimeCount} incidents nearby</span>
+                            </div>
+                        )}
+                        {line.isSummary && line.stats && (
+                            <div className="flex items-center gap-3 mb-2 border-b border-white/5 pb-2">
+                                <div className="flex flex-col">
+                                    <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Crimes Avoided</span>
+                                    <span className="text-sm text-green-400 font-mono font-bold">+{Math.round(line.stats.crimes_avoided_score)}</span>
+                                </div>
+                                <div className="w-px h-6 bg-white/10" />
+                                <div className="flex flex-col">
+                                    <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Time Delta</span>
+                                    <span className="text-sm text-amber-400 font-mono font-bold">+{Math.round(line.stats.extra_time_min)}m</span>
+                                </div>
                             </div>
                         )}
                         <p className="text-white/85">{line.text}</p>

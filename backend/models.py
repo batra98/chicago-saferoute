@@ -32,6 +32,7 @@ class NarrateRequest(BaseModel):
     mode: Literal["safest", "balanced", "fastest"] = "safest"
     category: str | None = None
     hour: int | None = None
+    voice_id: str | None = None
 
 
 class RouteSegment(BaseModel):

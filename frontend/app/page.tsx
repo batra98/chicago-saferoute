@@ -59,6 +59,7 @@ export default function Home() {
   const [selectedHour, setSelectedHour] = useState<number | null>(9);
   const [flyToCoords, setFlyToCoords] = useState<{ lat: number; lng: number; zoom?: number } | null>(null);
   const [routeCompleted, setRouteCompleted] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState<string>("JBFqnCBsd6RMkjVDRZzb");
 
   // ── Load routes ──────────────────────────────────────────────────────────
   const loadRoutes = useCallback(async (rs: RouteState) => {
@@ -204,6 +205,22 @@ export default function Home() {
           onCategoryChange={setSelectedCategory}
         />
 
+        <div className="glass rounded-2xl p-4 flex flex-col gap-2">
+          <label className="text-xs font-bold text-white/40 uppercase tracking-widest">
+            AI Voice Persona
+          </label>
+          <select
+            value={selectedVoice}
+            onChange={(e) => setSelectedVoice(e.target.value)}
+            className="w-full bg-[#1e1e2e]/80 border border-white/10 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 transition-all cursor-pointer"
+          >
+            <option value="George">George (Mature, Raspy)</option>
+            <option value="Callum">Callum (Intense)</option>
+            <option value="Charlie">Charlie (Casual)</option>
+            <option value="Rachel">Rachel (Professional)</option>
+          </select>
+        </div>
+
         <SafetyWidget map={map} />
 
         {routeLoading && (
@@ -227,6 +244,7 @@ export default function Home() {
             mode={narratingMode}
             category={selectedCategory}
             hour={selectedHour}
+            voiceId={selectedVoice}
             mapRef={mapViewRef}
             active={!!narratingMode}
             onDone={() => {
