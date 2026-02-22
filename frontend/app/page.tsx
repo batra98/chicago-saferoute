@@ -9,6 +9,8 @@ import LocationSearch from "@/components/LocationSearch";
 import DemoPresets from "@/components/DemoPresets";
 import AgentNarrator from "@/components/AgentNarrator";
 import CrimeHeatmap from "@/components/CrimeHeatmap";
+import CrimeFilterToggles from "@/components/CrimeFilterToggles";
+import SafetyWidget from "@/components/SafetyWidget";
 import { MapViewHandle } from "@/components/MapView";
 
 // Dynamically import MapView to avoid SSR issues with mapbox-gl
@@ -47,6 +49,8 @@ export default function Home() {
   const [routeLoading, setRouteLoading] = useState(false);
   const [narratingMode, setNarratingMode] = useState<RouteMode | null>(null);
   const [heatmapVisible, setHeatmapVisible] = useState(true);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>("VIOLENT");
+  const [selectedHour, setSelectedHour] = useState<number | null>(9);
   const [flyToCoords, setFlyToCoords] = useState<{ lat: number; lng: number; zoom?: number } | null>(null);
 
   // ── Load routes ──────────────────────────────────────────────────────────
@@ -65,6 +69,8 @@ export default function Home() {
           start_lat: rs.startLat, start_lng: rs.startLng,
           end_lat: rs.endLat, end_lng: rs.endLng,
           start_label: rs.startLabel, end_label: rs.endLabel,
+          category: selectedCategory,
+          hour: selectedHour
         }),
       });
       if (!res.ok) {
@@ -86,7 +92,7 @@ export default function Home() {
     } finally {
       setRouteLoading(false);
     }
-  }, []);
+  }, [selectedCategory, selectedHour]);
 
   // ── Build route layers for map ────────────────────────────────────────────
   const routeLayers = route
@@ -113,7 +119,12 @@ export default function Home() {
       />
 
       {/* Crime Heatmap layer */}
-      <CrimeHeatmap map={map} visible={heatmapVisible} />
+      <CrimeHeatmap
+        map={map}
+        visible={heatmapVisible}
+        categoryFilter={selectedCategory}
+        hourFilter={selectedHour}
+      />
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
       <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none z-10">
@@ -166,6 +177,14 @@ export default function Home() {
           endLat: p.endLat, endLng: p.endLng,
           startLabel: p.startLabel, endLabel: p.endLabel,
         })} />
+
+        <CrimeFilterToggles
+          selectedCategory={selectedCategory}
+          onCategoryChange={setSelectedCategory}
+        />
+
+        <SafetyWidget map={map} />
+
         {routeLoading && (
           <div className="glass rounded-xl p-4 flex flex-col items-center justify-center gap-2 text-white/70">
             <div className="spinner w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full" />
@@ -185,10 +204,44 @@ export default function Home() {
             startLabel={routeState.startLabel}
             endLabel={routeState.endLabel}
             mode={narratingMode}
-            active={true}
+            category={selectedCategory}
+            hour={selectedHour}
             mapRef={mapViewRef}
-            onDone={() => { }}
+            active={!!narratingMode}
+            onDone={() => setNarratingMode(null)}
           />
+        </div>
+      )}
+
+      {/* ── Bottom Controls: Time-of-Day Slider ────────────────────────────── */}
+      {heatmapVisible && (
+        <div className="absolute bottom-10 left-1/2 -translate-x-1/2 w-[400px] z-10">
+          <div className="glass rounded-2xl p-4 flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold text-white/40 uppercase tracking-widest">Temporal Analysis</span>
+              <span className="text-xs font-mono text-indigo-400">
+                {selectedHour !== null ? `${selectedHour % 12 || 12}:00 ${selectedHour < 12 ? 'AM' : 'PM'}` : 'All Day'}
+              </span>
+            </div>
+
+            <input
+              type="range"
+              min="0"
+              max="23"
+              value={selectedHour ?? 9}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                setSelectedHour(val);
+              }}
+              className="w-full accent-indigo-500 bg-white/10 h-1.5 rounded-lg appearance-none cursor-pointer"
+            />
+
+            <div className="flex justify-between text-[9px] text-white/20 font-medium px-1">
+              <span>Midnight</span>
+              <span>Noon</span>
+              <span>Night</span>
+            </div>
+          </div>
         </div>
       )}
     </main>

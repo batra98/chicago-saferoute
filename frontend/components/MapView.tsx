@@ -36,6 +36,7 @@ export interface MapViewHandle {
     flyTo: (coords: { lat: number; lng: number; zoom?: number }) => void;
     setPulseMarkers: (incidents: PulseMarkerData[]) => void;
     setTurnArrow: (coords: { lat: number; lng: number } | null, bearing?: number) => void;
+    setAlternativeLines: (alternatives: { to_coords: { lat: number; lng: number }, from_coords: { lat: number; lng: number } }[]) => void;
 }
 
 interface MapViewProps {
@@ -99,6 +100,79 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
 
     // ── Imperative handle ────────────────────────────────────────────────────
     useImperativeHandle(ref, () => ({
+        setAlternativeLines(alternatives) {
+            const map = mapRef.current;
+            if (!map) return;
+            const sourceId = "route-alternatives";
+            let source = map.getSource(sourceId) as mapboxgl.GeoJSONSource;
+            if (!source) {
+                map.addSource(sourceId, {
+                    type: "geojson",
+                    data: { type: "FeatureCollection", features: [] }
+                });
+                map.addLayer({
+                    id: sourceId,
+                    type: "line",
+                    source: sourceId,
+                    paint: {
+                        "line-color": "#ffffff",
+                        "line-width": 3,
+                        "line-dasharray": [2, 2],
+                        "line-opacity": 0.3
+                    }
+                }, "route-safest-glow");
+                source = map.getSource(sourceId) as mapboxgl.GeoJSONSource;
+            }
+            const features: any[] = alternatives.map(alt => ({
+                type: "Feature" as const,
+                properties: {},
+                geometry: {
+                    type: "LineString" as const,
+                    coordinates: [
+                        [alt.from_coords.lng, alt.from_coords.lat],
+                        [alt.to_coords.lng, alt.to_coords.lat]
+                    ]
+                }
+            }));
+            source.setData({ type: "FeatureCollection", features });
+        },
+
+        setTurnArrow(coords, bearing = 0) {
+            const map = mapRef.current;
+            if (!map) return;
+            if (!coords) {
+                turnArrowMarkerRef.current?.remove();
+                turnArrowMarkerRef.current = null;
+                return;
+            }
+            if (!turnArrowMarkerRef.current) {
+                const el = document.createElement("div");
+                el.className = "turn-arrow-container flex items-center justify-center pointer-events-none";
+                el.innerHTML = `
+                    <div class="animate-bounce-sideways">
+                        <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="#6366f1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 12px rgba(99, 102, 241, 0.9))">
+                            <line x1="12" y1="19" x2="12" y2="5"></line>
+                            <polyline points="5 12 12 5 19 12"></polyline>
+                        </svg>
+                    </div>
+                `;
+                turnArrowMarkerRef.current = new mapboxgl.Marker({ element: el, rotationAlignment: 'map' })
+                    .setLngLat([coords.lng, coords.lat])
+                    .addTo(map);
+            } else {
+                turnArrowMarkerRef.current.setLngLat([coords.lng, coords.lat]);
+            }
+            turnArrowMarkerRef.current.setRotation(bearing);
+        },
+
+        setPulseMarkers(incidents) {
+            // Pulse markers have been removed to prioritize path and heatmap clarity.
+            const map = mapRef.current;
+            if (!map) return;
+            pulseMarkersRef.current.forEach(m => m.remove());
+            pulseMarkersRef.current = [];
+        },
+
         animateTo(toAndPath, durationMs = 1200): Promise<void> {
             return new Promise<void>((resolve) => {
                 const map = mapRef.current;
@@ -108,11 +182,21 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 // Create dot on first call
                 if (!agentMarkerRef.current) {
                     const el = document.createElement("div");
-                    el.className = "glow-dot w-5 h-5 rounded-full bg-indigo-500 border-2 border-white";
+                    el.className = "glow-dot w-5 h-5 rounded-full bg-indigo-500 border-2 border-white transition-all duration-300";
                     agentMarkerRef.current = new mapboxgl.Marker({ element: el })
                         .setLngLat([to.lng, to.lat])
                         .addTo(map);
                     currentPos.current = { lng: to.lng, lat: to.lat };
+
+                    // Center and zoom immediately on first call
+                    map.flyTo({
+                        center: [to.lng, to.lat],
+                        zoom: 15.5,
+                        pitch: 55,
+                        bearing: 0,
+                        duration: 1200
+                    });
+
                     resolve();
                     return;
                 }
@@ -149,6 +233,21 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 // For the trailer effect: grab the current route source if it exists
                 const routeSourceId = "route-safest";
                 const source = map.getSource(routeSourceId) as mapboxgl.GeoJSONSource | undefined;
+
+                // Set moving appearance (arrowhead)
+                const markerEl = agentMarkerRef.current?.getElement();
+                if (markerEl) {
+                    markerEl.classList.remove("rounded-full", "glow-dot");
+                    markerEl.style.borderRadius = "0";
+                    markerEl.style.background = "transparent";
+                    markerEl.style.border = "none";
+                    markerEl.style.animation = "none";
+                    markerEl.innerHTML = `
+                        <svg viewBox="0 0 24 24" width="24" height="24" fill="#6366f1" style="filter: drop-shadow(0 0 4px rgba(99, 102, 241, 0.8))">
+                            <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" />
+                        </svg>
+                    `;
+                }
 
                 const step = (now: number) => {
                     const t = Math.min((now - start) / durationMs, 1);
@@ -212,6 +311,12 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                     // Smooth the camera turning slightly so it doesn't instantly snap on curve vertices
                     lastBearing = lastBearing + deltaBearing * 0.15;
 
+                    // Rotate arrowhead marker
+                    if (agentMarkerRef.current) {
+                        agentMarkerRef.current.setRotation(segmentBearing);
+                        agentMarkerRef.current.setRotationAlignment('map');
+                    }
+
                     const currentZoom = startZoom + (targetZoom - startZoom) * ease;
                     const currentPitch = startPitch + (targetPitch - startPitch) * ease;
 
@@ -241,6 +346,15 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                             drawnFeaturesRef.current.push(...finalSegmentFeatures);
                             source.setData({ type: "FeatureCollection", features: drawnFeaturesRef.current });
                         }
+
+                        // Revert to dot when stopped
+                        if (markerEl) {
+                            markerEl.innerHTML = "";
+                            markerEl.className = "glow-dot w-5 h-5 rounded-full bg-indigo-500 border-2 border-white transition-all duration-300";
+                            markerEl.style.background = "";
+                            markerEl.style.border = "";
+                        }
+
                         resolve();
                     }
                 };
@@ -266,139 +380,6 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
 
         flyTo(coords) {
             mapRef.current?.flyTo({ center: [coords.lng, coords.lat], zoom: coords.zoom ?? 13, speed: 1.4, curve: 1.2 });
-        },
-
-        setPulseMarkers(incidents) {
-            const map = mapRef.current;
-            if (!map) return;
-
-            pulseMarkersRef.current.forEach(m => m.remove());
-            pulseMarkersRef.current = [];
-
-            // 1. Helper for mapping crime type to visuals
-            const getCrimeVisuals = (type: string) => {
-                const upperType = type.toUpperCase();
-
-                // Red (Violent / High Risk)
-                if (["HOMICIDE", "BATTERY", "ASSAULT", "ROBBERY", "WEAPONS VIOLATION", "CRIM SEXUAL ASSAULT"].includes(upperType)) {
-                    return {
-                        baseColor: "bg-red-500",
-                        borderColor: "border-red-300",
-                        textColor: "text-red-500",
-                        // AlertTriangle SVG
-                        icon: `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>`
-                    };
-                }
-
-                // Orange (Property / Medium Risk)
-                if (["THEFT", "MOTOR VEHICLE THEFT", "BURGLARY", "CRIMINAL DAMAGE", "DECEPTIVE PRACTICE"].includes(upperType)) {
-                    return {
-                        baseColor: "bg-orange-500",
-                        borderColor: "border-orange-300",
-                        textColor: "text-orange-500",
-                        // Search/MagnifyingGlass SVG
-                        icon: `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>`
-                    };
-                }
-
-                // Green (Lower Risk / Other)
-                return {
-                    baseColor: "bg-emerald-500",
-                    borderColor: "border-emerald-300",
-                    textColor: "text-emerald-500",
-                    // Info SVG
-                    icon: `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>`
-                };
-            };
-
-            incidents.forEach(inc => {
-                const visuals = getCrimeVisuals(inc.type);
-
-                const el = document.createElement("div");
-                el.innerHTML = `
-                    <div class="absolute inset-0 rounded-full ${visuals.baseColor} opacity-75 animate-ping" style="animation-duration: 2s;"></div>
-                    <div class="relative flex items-center justify-center w-5 h-5 rounded-full ${visuals.baseColor} ${visuals.borderColor} border-2 text-white shadow-lg shadow-black/50">
-                        ${visuals.icon}
-                    </div>
-                `;
-                el.className = "relative flex items-center justify-center w-5 h-5 cursor-help transition-transform hover:scale-125 hover:z-50";
-
-                // Hover Tooltip using Mapbox Popup
-                const dateStr = inc.date && inc.date !== "Recent"
-                    ? new Date(inc.date).toLocaleDateString([], { month: 'short', day: 'numeric' })
-                    : 'Recent';
-
-                const popupHTML = `
-                    <div class="text-sm border border-white/10 px-3 py-2 rounded-lg bg-black/90 text-white shadow-2xl backdrop-blur-md min-w-max font-sans">
-                        <strong class="block ${visuals.textColor} uppercase tracking-wider text-[10px] font-bold mb-0.5">${inc.type}</strong>
-                        <span class="text-xs text-slate-300 flex items-center gap-1.5 opacity-80">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                            ${dateStr}
-                        </span>
-                    </div>
-                `;
-
-                // Configure popup to be minimal and clean exactly like the design system
-                const popup = new mapboxgl.Popup({
-                    offset: 15,
-                    closeButton: false,
-                    closeOnClick: false,
-                    className: "crime-pulse-popup" // For overriding mapbox-gl-popup CSS if needed
-                }).setHTML(popupHTML);
-
-                const marker = new mapboxgl.Marker({ element: el })
-                    .setLngLat([inc.lng, inc.lat])
-                    .setPopup(popup)
-                    .addTo(map);
-
-                // Add hover listeners directly to the DOM element Mapbox created
-                let isHovered = false;
-                el.addEventListener('mouseenter', () => {
-                    if (!isHovered) {
-                        marker.togglePopup();
-                        isHovered = true;
-                    }
-                });
-                el.addEventListener('mouseleave', () => {
-                    if (isHovered) {
-                        marker.togglePopup();
-                        isHovered = false;
-                    }
-                });
-
-                pulseMarkersRef.current.push(marker);
-            });
-        },
-
-        setTurnArrow(coords, bearing = 0) {
-            const map = mapRef.current;
-            if (!map) return;
-
-            if (!coords) {
-                turnArrowMarkerRef.current?.remove();
-                turnArrowMarkerRef.current = null;
-                return;
-            }
-
-            if (!turnArrowMarkerRef.current) {
-                const el = document.createElement("div");
-                el.className = "turn-arrow-container flex items-center justify-center pointer-events-none";
-                el.innerHTML = `
-                    <div class="animate-bounce-sideways">
-                        <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="#6366f1" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.8))">
-                            <line x1="12" y1="19" x2="12" y2="5"></line>
-                            <polyline points="5 12 12 5 19 12"></polyline>
-                        </svg>
-                    </div>
-                `;
-                turnArrowMarkerRef.current = new mapboxgl.Marker({ element: el, rotationAlignment: 'map' })
-                    .setLngLat([coords.lng, coords.lat])
-                    .addTo(map);
-            } else {
-                turnArrowMarkerRef.current.setLngLat([coords.lng, coords.lat]);
-            }
-
-            turnArrowMarkerRef.current.setRotation(bearing);
         },
     }), []);
 

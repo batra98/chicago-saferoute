@@ -16,6 +16,7 @@ interface CrimeHeatmapProps {
     map: mapboxgl.Map | null;
     visible: boolean;
     crimeTypeFilter?: string | null;
+    categoryFilter?: string | null; // VIOLENT, PROPERTY, OTHER
     hourFilter?: number | null;
 }
 
@@ -27,6 +28,7 @@ export default function CrimeHeatmap({
     map,
     visible,
     crimeTypeFilter,
+    categoryFilter,
     hourFilter,
 }: CrimeHeatmapProps) {
     const [loading, setLoading] = useState(false);
@@ -39,90 +41,99 @@ export default function CrimeHeatmap({
             setLoading(true);
             let url = `${API_URL}/crimes/heatmap?`;
             if (crimeTypeFilter) url += `crime_type=${encodeURIComponent(crimeTypeFilter)}&`;
+            if (categoryFilter) url += `category=${encodeURIComponent(categoryFilter)}&`;
             if (hourFilter !== null && hourFilter !== undefined) url += `hour=${hourFilter}`;
 
-            const res = await fetch(url);
-            const data = await res.json();
-            const points: HeatmapPoint[] = data.points;
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                const points: HeatmapPoint[] = data.points;
 
-            const geojson: GeoJSON.FeatureCollection = {
-                type: "FeatureCollection",
-                features: points.map((p) => ({
-                    type: "Feature",
-                    properties: { weight: p.weight, type: p.type },
-                    geometry: { type: "Point", coordinates: [p.lng, p.lat] },
-                })),
-            };
+                const geojson: GeoJSON.FeatureCollection = {
+                    type: "FeatureCollection",
+                    features: points.map((p) => ({
+                        type: "Feature",
+                        properties: { weight: p.weight, type: p.type },
+                        geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+                    })),
+                };
 
-            if (map.getSource(SOURCE_ID)) {
-                (map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).setData(geojson);
-            } else {
-                map.addSource(SOURCE_ID, { type: "geojson", data: geojson });
+                const applyToMap = () => {
+                    if (!map) return;
+                    if (map.getSource(SOURCE_ID)) {
+                        (map.getSource(SOURCE_ID) as mapboxgl.GeoJSONSource).setData(geojson);
+                    } else {
+                        map.addSource(SOURCE_ID, { type: "geojson", data: geojson });
 
-                // Heatmap layer
-                map.addLayer(
-                    {
-                        id: LAYER_ID,
-                        type: "heatmap",
-                        source: SOURCE_ID,
-                        maxzoom: 15,
-                        paint: {
-                            "heatmap-weight": ["interpolate", ["linear"], ["get", "weight"], 0, 0, 10, 1],
-                            "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 15, 3],
-                            "heatmap-color": [
-                                "interpolate",
-                                ["linear"],
-                                ["heatmap-density"],
-                                0, "rgba(0,0,0,0)",
-                                0.1, "rgba(80,20,120,0.6)",
-                                0.3, "rgba(140,40,180,0.7)",
-                                0.5, "rgba(220,80,40,0.8)",
-                                0.8, "rgba(255,140,0,0.9)",
-                                1, "rgba(255,60,20,1)",
-                            ],
-                            "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 8, 4, 15, 20],
-                            "heatmap-opacity": 0.85,
-                        },
-                    },
-                    "waterway-label"
-                );
+                        // Heatmap layer
+                        map.addLayer(
+                            {
+                                id: LAYER_ID,
+                                type: "heatmap",
+                                source: SOURCE_ID,
+                                maxzoom: 15,
+                                paint: {
+                                    "heatmap-weight": ["interpolate", ["linear"], ["get", "weight"], 0, 0, 10, 1.2],
+                                    "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 0, 1, 15, 3.5],
+                                    "heatmap-color": [
+                                        "interpolate",
+                                        ["linear"],
+                                        ["heatmap-density"],
+                                        0, "rgba(0,0,0,0)",
+                                        0.1, "rgba(52, 211, 153, 0.4)",  // Emerald/Green (Safe)
+                                        0.25, "rgba(250, 204, 21, 0.6)", // Yellow (Moderate)
+                                        0.5, "rgba(251, 146, 60, 0.7)",  // Orange (High Risk)
+                                        0.8, "rgba(248, 113, 113, 0.8)", // Red (Severe)
+                                        1, "rgba(220, 38, 38, 0.9)",     // Deep Red
+                                    ],
+                                    "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 8, 8, 15, 40],
+                                    "heatmap-opacity": 0.7,
+                                },
+                            },
+                            "waterway-label"
+                        );
 
-                // Individual points at high zoom
-                map.addLayer({
-                    id: POINTS_LAYER_ID,
-                    type: "circle",
-                    source: SOURCE_ID,
-                    minzoom: 14,
-                    paint: {
-                        "circle-radius": 4,
-                        "circle-color": [
-                            "match",
-                            ["get", "type"],
-                            "HOMICIDE", "#ef4444",
-                            "ASSAULT", "#f97316",
-                            "ROBBERY", "#f59e0b",
-                            "BATTERY", "#fb923c",
-                            "THEFT", "#3b82f6",
-                            "#9ca3af",
-                        ],
-                        "circle-opacity": 0.75,
-                        "circle-stroke-width": 1,
-                        "circle-stroke-color": "rgba(255,255,255,0.3)",
-                    },
-                });
-                loadedRef.current = true;
+                        // Individual points at high zoom
+                        map.addLayer({
+                            id: POINTS_LAYER_ID,
+                            type: "circle",
+                            source: SOURCE_ID,
+                            minzoom: 14,
+                            paint: {
+                                "circle-radius": 4,
+                                "circle-color": [
+                                    "match",
+                                    ["get", "type"],
+                                    "HOMICIDE", "#ef4444",
+                                    "ASSAULT", "#f97316",
+                                    "ROBBERY", "#f59e0b",
+                                    "BATTERY", "#fb923c",
+                                    "THEFT", "#3b82f6",
+                                    "#9ca3af",
+                                ],
+                                "circle-opacity": 0.75,
+                                "circle-stroke-width": 1,
+                                "circle-stroke-color": "rgba(255,255,255,0.3)",
+                            },
+                        });
+                        loadedRef.current = true;
+                    }
+                };
+
+                if (map.isStyleLoaded()) {
+                    applyToMap();
+                } else {
+                    map.once("style.load", applyToMap);
+                }
+            } catch (e) {
+                console.error("Heatmap fetch error:", e);
+            } finally {
+                setLoading(false);
             }
-            setLoading(false);
         };
 
-        const onLoad = () => load();
-        if (map.isStyleLoaded()) {
-            load();
-        } else {
-            map.on("load", onLoad);
-            return () => { map.off("load", onLoad); };
-        }
-    }, [map, crimeTypeFilter, hourFilter]);
+        load();
+    }, [map, crimeTypeFilter, categoryFilter, hourFilter]);
 
     // Toggle visibility
     useEffect(() => {

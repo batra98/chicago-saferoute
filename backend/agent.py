@@ -162,6 +162,7 @@ async def narrate_route_stream(
             "to_coords": s["to_coords"],
             "path_coords": s.get("path_coords"),
             "incidents": s.get("incidents", []),
+            "avoided_alternatives": s.get("avoided_alternatives", []),
         })
         seg_index += 1
 

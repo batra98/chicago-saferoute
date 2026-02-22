@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 
 from models import RouteRequest, NarrateRequest, DEMO_PRESETS
-from crime_data import load_crime_data, get_heatmap_points, get_crime_summary
+from crime_data import load_crime_data, get_heatmap_points, get_crime_summary, get_neighborhood_safety, CRIME_CATEGORIES
 from graph_builder import build_scored_graph
 from router import compute_routes, get_segment_crime_data
 from agent import narrate_route_stream
@@ -67,18 +67,36 @@ def health():
 # ── Crime data endpoints ──────────────────────────────────────────────────────
 @app.get("/crimes/heatmap")
 def crimes_heatmap(
-    crime_type: str | None = Query(None, description="Filter by crime type"),
+    crime_type: str | None = Query(None, description="Filter by exact primary_type"),
+    category: str | None = Query(None, description="Filter by CRIME_CATEGORIES key: VIOLENT, PROPERTY, OTHER"),
     hour: int | None = Query(None, ge=0, le=23, description="Filter by hour of day"),
 ):
     """Return crime points for the Deck.gl heatmap layer."""
     df = app_state["crime_df"]
 
+    if category:
+        cat_upper = category.upper()
+        if cat_upper in CRIME_CATEGORIES:
+            selected_types = CRIME_CATEGORIES[cat_upper]
+            df = df[df["primary_type"].str.upper().isin(selected_types)]
+    
     if crime_type:
         df = df[df["primary_type"].str.upper() == crime_type.upper()]
+        
     if hour is not None:
         df = df[df["date"].dt.hour == hour]
 
     return {"points": get_heatmap_points(df), "total": len(df)}
+
+
+@app.get("/crimes/neighborhood")
+def crimes_neighborhood(
+    lat: float = Query(..., description="Map center latitude"),
+    lng: float = Query(..., description="Map center longitude"),
+):
+    """Return local safety score and neighborhood context."""
+    df = app_state["crime_df"]
+    return get_neighborhood_safety(df, lat, lng)
 
 
 @app.get("/crimes/summary")
@@ -100,8 +118,13 @@ def crime_types():
 def route_compute(req: RouteRequest):
     """Compute the single safest route."""
     G = app_state["graph"]
+    crime_df = app_state["crime_df"]
     try:
-        route = compute_routes(G, req.start_lat, req.start_lng, req.end_lat, req.end_lng)
+        route = compute_routes(
+            G, crime_df, 
+            req.start_lat, req.start_lng, req.end_lat, req.end_lng,
+            category=req.category, hour=req.hour
+        )
     except Exception as e:
         logger.error("Routing error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -117,9 +140,16 @@ async def route_narrate(req: NarrateRequest):
     crime_df = app_state["crime_df"]
 
     try:
-        route = compute_routes(G, req.start_lat, req.start_lng, req.end_lat, req.end_lng)
+        route = compute_routes(
+            G, crime_df, 
+            req.start_lat, req.start_lng, req.end_lat, req.end_lng,
+            category=req.category, hour=req.hour
+        )
         node_ids = [c["node_id"] for c in route["coords"]]
-        segments = get_segment_crime_data(G, crime_df, node_ids)
+        segments = get_segment_crime_data(
+            G, crime_df, node_ids, 
+            category=req.category, hour=req.hour
+        )
     except Exception as e:
         logger.error("Narration setup error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))

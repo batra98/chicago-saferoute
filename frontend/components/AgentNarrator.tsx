@@ -15,6 +15,7 @@ export interface NarrationEvent {
     to_coords?: { lat: number; lng: number };
     path_coords?: { lat: number; lng: number }[];
     incidents?: { lat: number; lng: number; type: string }[];
+    avoided_alternatives?: any[];
     crime_count?: number;
     crime_score?: number;
     full_narration?: string;
@@ -29,6 +30,8 @@ interface AgentNarratorProps {
     startLabel: string;
     endLabel: string;
     mode: "safest" | "balanced" | "fastest";
+    category?: string | null;
+    hour?: number | null;
     active: boolean;
     mapRef: React.RefObject<MapViewHandle | null>;
     onDone?: () => void;
@@ -108,7 +111,9 @@ async function* readSSE(res: Response, signal: AbortSignal): AsyncGenerator<{ ev
 
 export default function AgentNarrator({
     startLat, startLng, endLat, endLng,
-    startLabel, endLabel, mode, active,
+    startLabel, endLabel, mode,
+    category, hour,
+    active,
     mapRef, onDone,
 }: AgentNarratorProps) {
     const [lines, setLines] = useState<DisplayLine[]>([]);
@@ -141,7 +146,10 @@ export default function AgentNarrator({
                 body: JSON.stringify({
                     start_lat: startLat, start_lng: startLng,
                     end_lat: endLat, end_lng: endLng,
-                    start_label: startLabel, end_label: endLabel, mode,
+                    start_label: startLabel, end_label: endLabel,
+                    mode,
+                    category,
+                    hour
                 }),
                 signal: abort.signal,
             });
@@ -153,6 +161,7 @@ export default function AgentNarrator({
                     const text = payload.text ?? "";
                     setLines([{ text }]);
                     if (voiceRef.current) await speakAndWait(text);
+                    if (abort.signal.aborted) break;
 
                 } else if (eventType === "segment_done") {
                     const coords = payload.coords;
@@ -168,16 +177,27 @@ export default function AgentNarrator({
                             mapRef.current?.setTurnArrow(payload.from_coords, bearing);
                         }
 
-                        // Spawn physical markers for the crimes while narrating
-                        if (payload.incidents) {
-                            mapRef.current?.setPulseMarkers(payload.incidents);
+                        // Visualization for avoided streets
+                        if (payload.avoided_alternatives && payload.from_coords) {
+                            const from = payload.from_coords;
+                            const alts = payload.avoided_alternatives.map((alt: any) => ({
+                                from_coords: from,
+                                to_coords: alt.to_coords
+                            }));
+                            console.log("AgentNarrator: mapRef.current keys:", Object.keys(mapRef.current || {}));
+                            if (mapRef.current && typeof mapRef.current.setAlternativeLines === 'function') {
+                                mapRef.current.setAlternativeLines(alts);
+                            } else {
+                                console.warn("AgentNarrator: setAlternativeLines is NOT a function on mapRef.current", mapRef.current);
+                            }
                         }
 
                         if (voiceRef.current) await speakAndWait(text);
+                        if (abort.signal.aborted) break;
 
                         // Clear visual indicators after speaking finishes
-                        mapRef.current?.setPulseMarkers([]);
                         mapRef.current?.setTurnArrow(null);
+                        mapRef.current?.setAlternativeLines([]);
                     }
 
                     if (coords) {
@@ -213,7 +233,7 @@ export default function AgentNarrator({
             abort.abort();
             cancelSpeech();
         };
-    }, [active, startLat, startLng, endLat, endLng, mode]);
+    }, [active, startLat, startLng, endLat, endLng, mode, category, hour]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });

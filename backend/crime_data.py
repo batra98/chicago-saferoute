@@ -42,6 +42,17 @@ SEVERITY_WEIGHTS = {
     "WEAPONS VIOLATION": 5.0,
 }
 
+CRIME_CATEGORIES = {
+    "VIOLENT": ["HOMICIDE", "BATTERY", "ASSAULT", "ROBBERY", "WEAPONS VIOLATION", "CRIM SEXUAL ASSAULT", "KIDNAPPING", "OFFENSE INVOLVING CHILDREN"],
+    "PROPERTY": ["THEFT", "MOTOR VEHICLE THEFT", "BURGLARY", "CRIMINAL DAMAGE", "DECEPTIVE PRACTICE", "ARSON", "STOLEN PROPERTY"],
+    "OTHER": ["NARCOTICS", "CRIMINAL TRESPASS", "PUBLIC PEACE VIOLATION", "LIQUOR LAW VIOLATION", "INTERFERENCE WITH PUBLIC OFFICER", "PROSTITUTION", "STALKING", "INTIMIDATION", "GAMBLING", "OBSCENITY"]
+}
+
+# Mapping of a few community area IDs to names for common areas
+COMMUNITY_AREA_NAMES = {
+    "1": "Rogers Park", "2": "West Ridge", "3": "Uptown", "4": "Lincoln Square", "5": "North Center", "6": "Lake View", "7": "Lincoln Park", "8": "Near North Side", "24": "West Town", "28": "Near West Side", "32": "Loop", "33": "Near South Side", "41": "Hyde Park", "77": "Edgewater"
+}
+
 HEATMAP_LIMIT = 50_000  # max incidents for heatmap response
 
 
@@ -131,4 +142,47 @@ def get_crime_summary(df: pd.DataFrame) -> dict:
             if "date" in df.columns
             else {}
         ),
+    }
+
+
+def get_neighborhood_safety(df: pd.DataFrame, lat: float, lng: float) -> dict:
+    """Find the safety score for the local area near lat/lng."""
+    # 1. Radius search (~1km)
+    # Approx 0.01 deg is ~1.1km
+    deg_radius = 0.01
+    mask = (
+        (df["latitude"] > lat - deg_radius) & (df["latitude"] < lat + deg_radius) &
+        (df["longitude"] > lng - deg_radius) & (df["longitude"] < lng + deg_radius)
+    )
+    local_df = df[mask]
+    
+    if local_df.empty:
+        return {"score": 0, "rating": "Unknown", "name": "Unknown", "incident_count": 0}
+    
+    # Get community area if available
+    ca_id = str(local_df["community_area"].iloc[0]) if "community_area" in local_df.columns and not local_df["community_area"].empty else "unknown"
+    ca_name = COMMUNITY_AREA_NAMES.get(ca_id, f"Area {ca_id}")
+
+    # Calculate score based on density and severity
+    # We'll normalize relative to some "high" density.
+    # A "Moderate" score might be ~50-100 incidents per sq km per year.
+    count = len(local_df)
+    total_severity = local_df["severity"].sum()
+    
+    # Heuristic scoring (0-100, 100 is best)
+    # Higher density/severity reduces score
+    # Use square-root scaling for better distribution; 30,000 severity = 0 score.
+    # Median severity (~5500) will result in a score of ~57.
+    penalty = 100 * ((total_severity / 30000) ** 0.5)
+    score = max(0, min(100, 100 - penalty))
+    
+    rating = "Safe"
+    if score < 40: rating = "High Risk"
+    elif score < 70: rating = "Moderate"
+    
+    return {
+        "score": round(score),
+        "rating": rating,
+        "name": ca_name,
+        "incident_count": count
     }

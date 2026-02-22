@@ -18,27 +18,27 @@ interface DemoPreset {
 const PRESETS: DemoPreset[] = [
     {
         id: 1,
-        name: "The Tourist",
-        description: "Millennium Park → Lincoln Park Zoo",
+        name: "Historical Walk",
+        description: "Union Station → Dearborn Station",
         icon: <Landmark className="w-4 h-4 text-cyan-400" />,
-        startLat: 41.8826, startLng: -87.6233, startLabel: "Millennium Park",
-        endLat: 41.9214, endLng: -87.6337, endLabel: "Lincoln Park Zoo",
+        startLat: 41.8781, startLng: -87.6403, startLabel: "Union Station",
+        endLat: 41.8735, endLng: -87.6293, endLabel: "Dearborn Station",
     },
     {
         id: 2,
-        name: "The Student",
-        description: "Wicker Park → UIC Campus",
+        name: "Neighborhood Hop",
+        description: "Wicker Park → Churchill Park",
         icon: <GraduationCap className="w-4 h-4 text-purple-400" />,
-        startLat: 41.9097, startLng: -87.6773, startLabel: "Wicker Park Blue Line",
-        endLat: 41.8710, endLng: -87.6500, endLabel: "UIC–Halsted Station",
+        startLat: 41.9097, startLng: -87.6773, startLabel: "Wicker Park Station",
+        endLat: 41.9168, endLng: -87.6845, endLabel: "Churchill Park",
     },
     {
         id: 3,
         name: "The Night Owl",
-        description: "Logan Square → River North",
+        description: "Old Town → Wacker Drive",
         icon: <Moon className="w-4 h-4 text-amber-400" />,
-        startLat: 41.9219, startLng: -87.7068, startLabel: "Logan Square Blue Line",
-        endLat: 41.8919, endLng: -87.6323, endLabel: "River North (Clark & Ohio)",
+        startLat: 41.9077, startLng: -87.6346, startLabel: "Old Town",
+        endLat: 41.8885, endLng: -87.6323, endLabel: "Wacker Drive",
     },
 ];
 

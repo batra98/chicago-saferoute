@@ -4,6 +4,7 @@ Supports three modes: safest, balanced, fastest.
 """
 
 import logging
+import os
 from typing import Literal
 
 import networkx as nx
@@ -71,10 +72,13 @@ def _compute_edge_weight(G: nx.MultiDiGraph, alpha: float, beta: float) -> dict:
 
 def compute_routes(
     G: nx.MultiDiGraph,
+    crime_df: any, # pd.DataFrame
     start_lat: float,
     start_lng: float,
     end_lat: float,
     end_lng: float,
+    category: str | None = None,
+    hour: int | None = None,
 ) -> dict:
     """
     Compute a single Dijkstra route optimizing for safety.
@@ -89,10 +93,53 @@ def compute_routes(
     logger.info("Computing single %s route...", mode)
 
     # Build weight dict
-    edge_weights = _compute_edge_weight(G, alpha, beta)
+    # DYNAMIC FILTERING: If filters are present, we re-calculate crime scores for ALL edges
+    if category or hour is not None:
+        from crime_data import CRIME_CATEGORIES
+        logger.info("Applying dynamic filters to routing: category=%s, hour=%s", category, hour)
+        df = crime_df
+        if category:
+            cat_upper = category.upper()
+            if cat_upper in CRIME_CATEGORIES:
+                df = df[df["primary_type"].str.upper().isin(CRIME_CATEGORIES[cat_upper])]
+        if hour is not None:
+            df = df[df["date"].dt.hour == hour]
+        
+        # Re-score edges based on filtered DF
+        from scipy.spatial import KDTree
+        crs = G.graph["crs"]
+        transformer = Transformer.from_crs("EPSG:4326", crs, always_xy=True)
+        x_utm, y_utm = transformer.transform(df["longitude"].values, df["latitude"].values)
+        tree = KDTree(np.column_stack([x_utm, y_utm]))
+        crime_severities = df["severity"].values
+        
+        # We need a copy or we update the original edata? 
+        # For simplicity, we just create a temporary weights dict
+        dynamic_crime_scores = {}
+        radius = float(os.getenv("CRIME_RADIUS_METERS", "75"))
+        
+        for u, v, key, data in G.edges(data=True, keys=True):
+            mid_x = (G.nodes[u]["x"] + G.nodes[v]["x"]) / 2
+            mid_y = (G.nodes[u]["y"] + G.nodes[v]["y"]) / 2
+            indices = tree.query_ball_point([mid_x, mid_y], radius)
+            dynamic_crime_scores[(u, v, key)] = float(np.sum(crime_severities[indices])) if indices else 0.0
+
+        # Now compute Dijkstra weights using dynamic scores
+        distances = [d.get("length", 1.0) for _, _, _, d in G.edges(data=True, keys=True)]
+        crimes = list(dynamic_crime_scores.values())
+        max_dist = max(distances) if distances else 1.0
+        max_crime = max(crimes) if crimes else 1.0
+        if max_crime == 0: max_crime = 1.0
+        
+        edge_weights = {}
+        for u, v, key, data in G.edges(data=True, keys=True):
+            norm_d = data.get("length", 1.0) / max_dist
+            norm_c = dynamic_crime_scores[(u, v, key)] / max_crime
+            edge_weights[(u, v, key)] = alpha * norm_d + beta * norm_c + 1e-6
+    else:
+        edge_weights = _compute_edge_weight(G, alpha, beta)
 
     def weight_fn(u, v, data):
-        # Pick the key with lowest weight
         return min(edge_weights.get((u, v, k), 1e9) for k in data)
 
     path_nodes = nx.shortest_path(G, origin, destination, weight=weight_fn)
@@ -146,6 +193,8 @@ def get_segment_crime_data(
     crime_df,
     path_nodes: list[int],
     radius_m: float = 100,
+    category: str | None = None,
+    hour: int | None = None,
 ) -> list[dict]:
     """
     For each consecutive pair of nodes (segment) in a path,
@@ -156,6 +205,16 @@ def get_segment_crime_data(
 
     crs = G.graph.get("crs", "EPSG:4326")
     t = _get_transformer(crs) if crs != "EPSG:4326" else None
+
+    # Apply filters to the crime_df used for narration/segment analysis
+    if category or hour is not None:
+        from crime_data import CRIME_CATEGORIES
+        if category:
+            cat_upper = category.upper()
+            if cat_upper in CRIME_CATEGORIES:
+                crime_df = crime_df[crime_df["primary_type"].str.upper().isin(CRIME_CATEGORIES[cat_upper])]
+        if hour is not None:
+            crime_df = crime_df[crime_df["date"].dt.hour == hour]
 
     tree = KDTree(crime_df[["latitude", "longitude"]].values)
     radius_deg = radius_m / 111_000
@@ -237,7 +296,8 @@ def get_segment_crime_data(
                     avoided_alternatives.append({
                         "street_name": alt_name,
                         "crime_count": alt_count,
-                        "crime_summary": alt_summary
+                        "crime_summary": alt_summary,
+                        "to_coords": {"lat": alt_v_lat, "lng": alt_v_lng}
                     })
                     
                     if len(avoided_alternatives) >= 2:
@@ -252,7 +312,10 @@ def get_segment_crime_data(
             "mid_coords": {"lat": mid_lat, "lng": mid_lng},
             "path_coords": path_coords,
             "distance_m": round(edata.get("length", 0)),
-            "street_name": edata.get("name", "Unknown St"),
+            "street_name": (
+                edata.get("name")[0] if isinstance(edata.get("name"), list) 
+                else edata.get("name", "this segment")
+            ) if edata.get("name") else "this segment",
             "crime_count": len(indices),
             "crime_score": round(edata.get("crime_score", 0), 2),
             "crime_summary": crime_summary,

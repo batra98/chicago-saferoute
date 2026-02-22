@@ -18,6 +18,8 @@ class RouteRequest(BaseModel):
     end_lng: float = Field(..., description="End longitude")
     start_label: str = Field(default="Start", description="Human-readable start name")
     end_label: str = Field(default="Destination", description="Human-readable end name")
+    category: str | None = Field(None, description="VIOLENT, PROPERTY, or OTHER")
+    hour: int | None = Field(None, ge=0, le=23, description="0-23")
 
 
 class NarrateRequest(BaseModel):
@@ -28,6 +30,8 @@ class NarrateRequest(BaseModel):
     start_label: str = "Start"
     end_label: str = "Destination"
     mode: Literal["safest", "balanced", "fastest"] = "safest"
+    category: str | None = None
+    hour: int | None = None
 
 
 class RouteSegment(BaseModel):
