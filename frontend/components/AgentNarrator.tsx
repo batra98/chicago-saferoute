@@ -15,7 +15,7 @@ export interface NarrationEvent {
     to_coords?: { lat: number; lng: number };
     path_coords?: { lat: number; lng: number }[];
     incidents?: { lat: number; lng: number; type: string }[];
-    avoided_alternatives?: any[];
+    avoided_alternatives?: { to_coords: { lat: number; lng: number } }[];
     crime_count?: number;
     crime_score?: number;
     full_narration?: string;
@@ -281,7 +281,7 @@ export default function AgentNarrator({
 
                         if (payload.avoided_alternatives && payload.from_coords) {
                             const from = payload.from_coords;
-                            const alts = payload.avoided_alternatives.map((alt: any) => ({
+                            const alts = payload.avoided_alternatives.map((alt) => ({
                                 from_coords: from,
                                 to_coords: alt.to_coords
                             }));
@@ -338,7 +338,7 @@ export default function AgentNarrator({
                 window.speechSynthesis.cancel();
             }
         };
-    }, [active, startLat, startLng, endLat, endLng, mode, category, hour, playAudioBase64AndWait]);
+    }, [active, startLat, startLng, endLat, endLng, mode, category, hour, playAudioBase64AndWait, mapRef, startLabel, endLabel, voiceId, onDone]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });

@@ -31,7 +31,6 @@ export default function CrimeHeatmap({
     categoryFilter,
     hourFilter,
 }: CrimeHeatmapProps) {
-    const [loading, setLoading] = useState(false);
     const [isLayerReady, setIsLayerReady] = useState(false);
     const loadedRef = useRef(false);
 
@@ -39,7 +38,6 @@ export default function CrimeHeatmap({
         if (!map) return;
 
         const load = async () => {
-            setLoading(true);
             let url = `${API_URL}/crimes/heatmap?`;
             if (crimeTypeFilter) url += `crime_type=${encodeURIComponent(crimeTypeFilter)}&`;
             if (categoryFilter) url += `category=${encodeURIComponent(categoryFilter)}&`;
@@ -128,8 +126,6 @@ export default function CrimeHeatmap({
                 }
             } catch (e) {
                 console.error("Heatmap fetch error:", e);
-            } finally {
-                setLoading(false);
             }
         };
 
@@ -154,7 +150,9 @@ export default function CrimeHeatmap({
         const onMouseEnter = (e: mapboxgl.MapLayerMouseEvent) => {
             if (!visible) return;
             map.getCanvas().style.cursor = "pointer";
-            const coordinates = (e.features![0].geometry as any).coordinates.slice();
+            const feature = e.features![0];
+            const geometry = feature.geometry as GeoJSON.Point;
+            const coordinates = geometry.coordinates.slice() as [number, number];
             const props = e.features![0].properties;
             const type = props?.type || "Unknown";
             const weight = props?.weight || 0;

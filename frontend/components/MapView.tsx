@@ -127,7 +127,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 }, "route-safest-glow");
                 source = map.getSource(sourceId) as mapboxgl.GeoJSONSource;
             }
-            const features: any[] = alternatives.map(alt => ({
+            const features: GeoJSON.Feature<GeoJSON.LineString>[] = alternatives.map(alt => ({
                 type: "Feature" as const,
                 properties: {},
                 geometry: {
@@ -169,7 +169,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
             turnArrowMarkerRef.current.setRotation(bearing);
         },
 
-        setPulseMarkers(incidents) {
+        setPulseMarkers(_incidents) {
             // Pulse markers have been removed to prioritize path and heatmap clarity.
             const map = mapRef.current;
             if (!map) return;
@@ -210,7 +210,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                 // If we have a polyline path, we animate along it. Otherwise just straight line.
                 // We always ensure the path starts exactly where the dot is currently, 
                 // and ends exactly at the requested destination.
-                const path: { lat: number, lng: number }[] = (toAndPath as { path?: { lat: number, lng: number }[] }).path ?? [from, to];
+                const path: RouteCoord[] = (toAndPath as { path?: RouteCoord[] }).path ?? [from, to];
 
                 // Calculate cumulative distances along the path
                 const dists = [0];
@@ -305,7 +305,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                             const p2 = currentPathCoords[i + 1];
                             activeFeatures.push({
                                 type: "Feature",
-                                properties: { crime_score_norm: (path as any)[i]?.crime_score_norm ?? 0 },
+                                properties: { crime_score_norm: path[i]?.crime_score_norm ?? 0 },
                                 geometry: { type: "LineString", coordinates: [[p1.lng, p1.lat], [p2.lng, p2.lat]] },
                             });
                         }
@@ -351,7 +351,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
                                 const p2 = path[i + 1];
                                 finalSegmentFeatures.push({
                                     type: "Feature",
-                                    properties: { crime_score_norm: (path as any)[i]?.crime_score_norm ?? 0 },
+                                    properties: { crime_score_norm: path[i]?.crime_score_norm ?? 0 },
                                     geometry: { type: "LineString", coordinates: [[p1.lng, p1.lat], [p2.lng, p2.lat]] },
                                 });
                             }
