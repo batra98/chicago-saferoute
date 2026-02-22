@@ -108,43 +108,57 @@ def pcm_to_wav(pcm_data: bytes, sample_rate=24000, channels=1, bit_depth=16) -> 
     header.write(struct.pack('<I', len(pcm_data)))
     return header.getvalue() + pcm_data
 
-async def generate_narrator_audio(text: str, voice_id: str | None = None) -> str | None:
+async def generate_narrator_audio(text: str, voice_id: str | None = None, timeout: float = 20.0) -> str | None:
     """
-    Generates speech using Gemini Native TTS.
+    Generates speech using Gemini Native TTS via async client.
     Returns base64 encoded audio string (WAV).
     """
     if not text:
         return None
         
-    # Default to Gemini 2.5 Native TTS (Unlimited Free Tier for Hackathon)
     try:
+        # Default to Gemini 2.5 Native TTS (Unlimited Free Tier for Hackathon)
         # Map human-friendly names to Gemini personas
         voice_map = {"George": "Puck", "Callum": "Charon", "Charlie": "Aoede", "Rachel": "Kore"}
         gemini_voice = voice_map.get(voice_id, "Puck") if voice_id else "Puck"
 
-        def _call_gemini_tts():
-            resp = client.models.generate_content(
-                model='gemini-2.5-flash-preview-tts',
-                contents=text,
-                config=types.GenerateContentConfig(
-                    response_modalities=['AUDIO'],
-                    speech_config=types.SpeechConfig(
-                        voice_config=types.VoiceConfig(
-                            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=gemini_voice)
-                        )
+        resp = await client.aio.models.generate_content(
+            model='gemini-2.5-flash-preview-tts',
+            contents=text,
+            config=types.GenerateContentConfig(
+                response_modalities=['AUDIO'],
+                speech_config=types.SpeechConfig(
+                    voice_config=types.VoiceConfig(
+                        prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=gemini_voice)
                     )
-                )
+                ),
+                safety_settings=[
+                    types.SafetySetting(category=c, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+                    for c in [
+                        types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                        types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                        types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                        types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT
+                    ]
+                ]
             )
-            parts = [p for p in resp.candidates[0].content.parts if p.inline_data]
-            if not parts: return None
-            # Gemini returns raw 24kHz PCM. Convert to playable WAV.
-            return pcm_to_wav(parts[0].inline_data.data)
+        )
+        
+        if not resp.candidates:
+            logger.error(f"Gemini TTS: No candidates returned. Prompt feedback: {resp.prompt_feedback}")
+            return None
+        
+        parts = [p for p in resp.candidates[0].content.parts if p.inline_data]
+        if not parts:
+            logger.error(f"Gemini TTS: No audio parts in response. Finish reason: {resp.candidates[0].finish_reason}")
+            return None
+            
+        # Gemini returns raw 24kHz PCM. Convert to playable WAV.
+        audio_data = pcm_to_wav(parts[0].inline_data.data)
+        return base64.b64encode(audio_data).decode('utf-8')
 
-        audio_data = await asyncio.wait_for(asyncio.to_thread(_call_gemini_tts), timeout=8.0)
-        if audio_data:
-            return base64.b64encode(audio_data).decode('utf-8')
-    except Exception as e:
-        logger.error(f"Gemini TTS error: {e}")
+    except Exception:
+        logger.error("Gemini TTS critical failure", exc_info=True)
             
     return None
 
@@ -168,6 +182,8 @@ async def narrate_route_stream(
         "segment_index": -1,
         "audio_base64": await generate_narrator_audio(intro, voice_id)
     })
+
+
 
     narrated_streets: set[str] = set()
     
@@ -288,8 +304,8 @@ async def narrate_route_stream(
     )
     summary_text = ""
     try:
-        def _call_gemini_summary_sync():
-            return client.models.generate_content(
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=summary_prompt,
                 config=types.GenerateContentConfig(
@@ -300,10 +316,8 @@ async def narrate_route_stream(
                         function_calling_config=types.FunctionCallingConfig(mode="NONE")
                     ),
                 ),
-            )
-        response = await asyncio.wait_for(
-            asyncio.to_thread(_call_gemini_summary_sync),
-            timeout=10.0
+            ),
+            timeout=15.0
         )
         summary_text = response.text or ""
     except asyncio.TimeoutError:
@@ -314,7 +328,7 @@ async def narrate_route_stream(
 
     yield _sse_event("done", {
         "summary": summary_text.strip(),
-        "audio_base64": await generate_narrator_audio(summary_text.strip(), voice_id)
+        "audio_base64": await generate_narrator_audio(summary_text.strip(), voice_id, timeout=30.0)
     })
 
 

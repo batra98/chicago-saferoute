@@ -59,7 +59,7 @@ export default function Home() {
   const [selectedHour, setSelectedHour] = useState<number | null>(9);
   const [flyToCoords, setFlyToCoords] = useState<{ lat: number; lng: number; zoom?: number } | null>(null);
   const [routeCompleted, setRouteCompleted] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState<string>("JBFqnCBsd6RMkjVDRZzb");
+  const [selectedVoice, setSelectedVoice] = useState<string>("George");
 
   // ── Load routes ──────────────────────────────────────────────────────────
   const loadRoutes = useCallback(async (rs: RouteState) => {
