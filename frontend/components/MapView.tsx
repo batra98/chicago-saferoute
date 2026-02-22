@@ -429,7 +429,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(
             container: containerRef.current,
             style: "mapbox://styles/mapbox/dark-v11",
             center: CHICAGO_CENTER,
-            zoom: 12,
+            zoom: 14.5,
             pitch: 30,
             bearing: -10,
             antialias: true,

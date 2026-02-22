@@ -338,7 +338,7 @@ export default function AgentNarrator({
                 window.speechSynthesis.cancel();
             }
         };
-    }, [active, startLat, startLng, endLat, endLng, mode, category, hour, playAudioBase64AndWait, mapRef, startLabel, endLabel, voiceId, onDone]);
+    }, [active, startLat, startLng, endLat, endLng, mode, category, hour, playAudioBase64AndWait, mapRef, startLabel, endLabel, voiceId]);
 
     useEffect(() => {
         bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -405,9 +405,9 @@ export default function AgentNarrator({
 
             <div className="flex-1 overflow-y-auto space-y-3 pr-1">
                 {lines.map((line, i) => (
-                    <div key={i} className={`fade-in text-sm leading-relaxed ${line.isSummary ? "border border-indigo-500/30 rounded-lg p-3 bg-indigo-500/5" : ""}`}>
+                    <div key={i} className={`fade-in leading-relaxed ${line.isSummary ? "border border-indigo-500/30 rounded-lg p-2 bg-indigo-500/5 text-xs" : "text-sm"}`}>
                         {line.isSummary && (
-                            <p className="text-xs font-semibold text-indigo-400 mb-1 flex items-center gap-1">
+                            <p className="text-[10px] uppercase tracking-wider font-semibold text-indigo-400 mb-1 flex items-center gap-1">
                                 <Navigation className="w-3 h-3" /> Route Summary
                             </p>
                         )}
@@ -418,19 +418,19 @@ export default function AgentNarrator({
                             </div>
                         )}
                         {line.isSummary && line.stats && (
-                            <div className="flex items-center gap-3 mb-2 border-b border-white/5 pb-2">
+                            <div className="flex items-center gap-3 mb-1.5 border-b border-white/5 pb-1.5">
                                 <div className="flex flex-col">
-                                    <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Crimes Avoided</span>
-                                    <span className="text-sm text-green-400 font-mono font-bold">+{Math.round(line.stats.crimes_avoided_score)}</span>
+                                    <span className="text-[9px] uppercase tracking-wider text-white/40 font-bold">Crimes Avoided</span>
+                                    <span className="text-xs text-green-400 font-mono font-bold">+{Math.round(line.stats.crimes_avoided_score)}</span>
                                 </div>
-                                <div className="w-px h-6 bg-white/10" />
+                                <div className="w-px h-5 bg-white/10" />
                                 <div className="flex flex-col">
-                                    <span className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Time Delta</span>
-                                    <span className="text-sm text-amber-400 font-mono font-bold">+{Math.round(line.stats.extra_time_min)}m</span>
+                                    <span className="text-[9px] uppercase tracking-wider text-white/40 font-bold">Time Delta</span>
+                                    <span className="text-xs text-amber-400 font-mono font-bold">+{Math.round(line.stats.extra_time_min)}m</span>
                                 </div>
                             </div>
                         )}
-                        <p className="text-white/85">{line.text}</p>
+                        <p className={`text-white/85 ${line.isSummary ? "text-[11px]" : ""}`}>{line.text}</p>
                     </div>
                 ))}
                 <div ref={bottomRef} />

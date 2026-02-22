@@ -10,6 +10,9 @@ interface HeatmapPoint {
     lng: number;
     weight: number;
     type: string;
+    description?: string;
+    block?: string;
+    date?: string;
 }
 
 interface CrimeHeatmapProps {
@@ -52,7 +55,13 @@ export default function CrimeHeatmap({
                     type: "FeatureCollection",
                     features: points.map((p) => ({
                         type: "Feature",
-                        properties: { weight: p.weight, type: p.type },
+                        properties: {
+                            weight: p.weight,
+                            type: p.type,
+                            block: p.block,
+                            description: p.description,
+                            date: p.date
+                        },
                         geometry: { type: "Point", coordinates: [p.lng, p.lat] },
                     })),
                 };
