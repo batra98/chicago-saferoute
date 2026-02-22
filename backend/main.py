@@ -38,7 +38,9 @@ async def lifespan(app: FastAPI):
     app_state.clear()
 
 
-# ── FastAPI app ───────────────────────────────────────────────────────────────
+# ── App configuration ─────────────────────────────────────────────────────────
+allowed_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+
 app = FastAPI(
     title="Chicago SafeRoute API",
     description="Crime-weighted routing with Gemini AI narration",
@@ -48,7 +50,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -185,3 +188,8 @@ def list_demos():
         str(k): {"name": v["name"], "description": v["description"]}
         for k, v in DEMO_PRESETS.items()
     }
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
